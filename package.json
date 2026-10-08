@@ -1,0 +1,25 @@
+{
+  "name": "clothing-recommendation",
+  "private": true,
+  "engines": {
+    "node": ">=22.22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @cr/shared",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d --build --wait",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "dev": "npm run build:shared && concurrently -n api,client,model -c blue,green,magenta \"npm run dev -w @cr/api\" \"npm run dev -w @cr/client\" \"npm run dev:model\"",
+    "dev:model": "cd services/model && .venv\\Scripts\\python -m uvicorn app.main:app --reload --reload-dir app --reload-dir ai --port 8100",
+    "codegen": "npm run codegen -w @cr/client",
+    "typecheck": "npm run build:shared && npm run typecheck -w @cr/api && npm run typecheck -w @cr/client",
+    "test:model": "cd services/model && .venv\\Scripts\\python -m pytest -q"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.4",
+    "typescript": "~6.0.3"
+  }
+}

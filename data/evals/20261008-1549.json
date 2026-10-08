@@ -1,0 +1,381 @@
+{
+  "at": "2026-10-08T15:40:44",
+  "sets": [
+    {
+      "set": "parse",
+      "passed": 23,
+      "total": 30,
+      "score": 0.767,
+      "threshold": 0.85,
+      "p50_ms": 5531,
+      "max_ms": 16968,
+      "results": [
+        {
+          "text": "성수에서 빈티지 4곳",
+          "ok": true,
+          "problems": [],
+          "ms": 2875
+        },
+        {
+          "text": "망원역 근처 빈티지랑 워크웨어 5곳, 3시간, 저렴하게",
+          "ok": true,
+          "problems": [],
+          "ms": 1843
+        },
+        {
+          "text": "홍대 스트릿 신발 위주로 반나절",
+          "ok": true,
+          "problems": [],
+          "ms": 1531
+        },
+        {
+          "text": "동묘 구제 최대한 많이 돌고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 1937
+        },
+        {
+          "text": "한남동 디자이너 편집숍 두 시간",
+          "ok": true,
+          "problems": [],
+          "ms": 1656
+        },
+        {
+          "text": "압구정 로데오에서 고프코어 3곳",
+          "ok": true,
+          "problems": [],
+          "ms": 1531
+        },
+        {
+          "text": "명동에서 저렴한 캐주얼 옷 6곳",
+          "ok": true,
+          "problems": [],
+          "ms": 14718
+        },
+        {
+          "text": "가로수길 미니멀한 옷가게 1시간만",
+          "ok": true,
+          "problems": [],
+          "ms": 16968
+        },
+        {
+          "text": "성수 Y2K 감성 가게, 카페도 들르고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 9000
+        },
+        {
+          "text": "부산 서면 빈티지 가게",
+          "ok": true,
+          "problems": [],
+          "ms": 15233
+        },
+        {
+          "text": "아메카지 좋아하는데 성수에서 비싸도 좋은 브랜드 위주로",
+          "ok": true,
+          "problems": [],
+          "ms": 1625
+        },
+        {
+          "text": "데님 찾으러 동대문 가고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 2468
+        },
+        {
+          "text": "가방이랑 신발 보러 명동 4시간",
+          "ok": true,
+          "problems": [],
+          "ms": 2062
+        },
+        {
+          "text": "이태원 빈티지 다섯 군데",
+          "ok": true,
+          "problems": [],
+          "ms": 5531
+        },
+        {
+          "text": "연남동 아메카지 워크웨어 쪽으로 돌아볼래",
+          "ok": true,
+          "problems": [],
+          "ms": 2625
+        },
+        {
+          "text": "강남역 근처 캐주얼 3곳",
+          "ok": true,
+          "problems": [],
+          "ms": 2796
+        },
+        {
+          "text": "성수동에서 싸게 구제 옷 사고 싶다 반나절",
+          "ok": true,
+          "problems": [],
+          "ms": 8078
+        },
+        {
+          "text": "건대 스트릿 브랜드 4곳 2시간",
+          "ok": true,
+          "problems": [],
+          "ms": 5812
+        },
+        {
+          "text": "신촌 미니멀 저렴하게",
+          "ok": true,
+          "problems": [],
+          "ms": 2343
+        },
+        {
+          "text": "을지로 빈티지 샵 최대한 많이",
+          "ok": true,
+          "problems": [],
+          "ms": 2593
+        },
+        {
+          "text": "고프코어 아웃도어 느낌 옷 보러 갈래, 성수",
+          "ok": true,
+          "problems": [],
+          "ms": 1500
+        },
+        {
+          "text": "명동 아우터 위주로 3시간 반",
+          "ok": true,
+          "problems": [],
+          "ms": 2781
+        },
+        {
+          "text": "홍대 Y2K 빈티지 6곳 저렴하게 카페도",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15312
+        },
+        {
+          "text": "도쿄 시모키타자와 빈티지 돌고 싶어",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15422
+        },
+        {
+          "text": "동대문에서 워크웨어 옷 구경",
+          "ok": true,
+          "problems": [],
+          "ms": 11655
+        },
+        {
+          "text": "한남 디자이너 브랜드, 비싸도 괜찮아",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15375
+        },
+        {
+          "text": "망원 구제 3곳 1시간 반",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15375
+        },
+        {
+          "text": "성수에서 점심 먹고 미니멀 옷 4곳",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15188
+        },
+        {
+          "text": "홍대 빈티지 돌다가 맛집도 하나 넣어줘",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15186
+        },
+        {
+          "text": "그냥 아무 데나 옷 구경",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15235
+        }
+      ]
+    },
+    {
+      "set": "edit",
+      "passed": 0,
+      "total": 20,
+      "score": 0.0,
+      "threshold": 0.85,
+      "p50_ms": 15389,
+      "max_ms": 15500,
+      "results": [
+        {
+          "text": "3번 빼줘",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15500
+        },
+        {
+          "text": "마지막 거 빼",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15453
+        },
+        {
+          "text": "2번 다른 데로",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15296
+        },
+        {
+          "text": "2번 말고 더 싼 데",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15389
+        },
+        {
+          "text": "4번을 맨 앞으로",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15266
+        },
+        {
+          "text": "2번이랑 3번 바꿔",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15343
+        },
+        {
+          "text": "신발 가게 하나 추가",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15264
+        },
+        {
+          "text": "좀 더 가깝게",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15313
+        },
+        {
+          "text": "내 취향 위주로 다시 짜줘",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15436
+        },
+        {
+          "text": "3번 빼고 가방 가게 넣어줘",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15375
+        },
+        {
+          "text": "1번 빈티지 가게로 바꿔",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15407
+        },
+        {
+          "text": "브론즈윅 빼",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15342
+        },
+        {
+          "text": "모노하 성수 대신 다른 곳",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15438
+        },
+        {
+          "text": "덜 걷게 해줘",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15452
+        },
+        {
+          "text": "편집숍 하나 더 넣어",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15250
+        },
+        {
+          "text": "첫 번째랑 두 번째 빼줘",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15406
+        },
+        {
+          "text": "옴니피플을 마지막으로 보내",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15485
+        },
+        {
+          "text": "5번을 더 싼 데로",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15358
+        },
+        {
+          "text": "오늘 날씨 어때?",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15281
+        },
+        {
+          "text": "4번 빼고 1번이랑 2번 순서 바꿔",
+          "ok": false,
+          "problems": [
+            "error: gave up after 25 attempts: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+          ],
+          "ms": 15437
+        }
+      ]
+    }
+  ]
+}

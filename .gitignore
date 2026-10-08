@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.env
+*.log
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# generated
+apps/client/src/gql/
+
+# 원본 데이터 (용량 큼)
+data/raw/
+data/logs/
+
+# 사용자가 올린 사진 (프로필·가게 사진: 개인 데이터)
+data/uploads/
+
+# build caches, local tool settings
+*.tsbuildinfo
+.claude/settings.local.json
+*.egg-info/

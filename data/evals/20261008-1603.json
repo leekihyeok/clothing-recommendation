@@ -1,0 +1,331 @@
+{
+  "at": "2026-10-08T16:01:13",
+  "sets": [
+    {
+      "set": "parse",
+      "passed": 30,
+      "run": 30,
+      "planned": 30,
+      "score": 1.0,
+      "complete": true,
+      "threshold": 0.85,
+      "p50_ms": 1578,
+      "max_ms": 23750,
+      "results": [
+        {
+          "text": "성수에서 빈티지 4곳",
+          "ok": true,
+          "problems": [],
+          "ms": 2984
+        },
+        {
+          "text": "망원역 근처 빈티지랑 워크웨어 5곳, 3시간, 저렴하게",
+          "ok": true,
+          "problems": [],
+          "ms": 2327
+        },
+        {
+          "text": "홍대 스트릿 신발 위주로 반나절",
+          "ok": true,
+          "problems": [],
+          "ms": 1312
+        },
+        {
+          "text": "동묘 구제 최대한 많이 돌고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 1389
+        },
+        {
+          "text": "한남동 디자이너 편집숍 두 시간",
+          "ok": true,
+          "problems": [],
+          "ms": 1735
+        },
+        {
+          "text": "압구정 로데오에서 고프코어 3곳",
+          "ok": true,
+          "problems": [],
+          "ms": 1359
+        },
+        {
+          "text": "명동에서 저렴한 캐주얼 옷 6곳",
+          "ok": true,
+          "problems": [],
+          "ms": 3780
+        },
+        {
+          "text": "가로수길 미니멀한 옷가게 1시간만",
+          "ok": true,
+          "problems": [],
+          "ms": 1422
+        },
+        {
+          "text": "성수 Y2K 감성 가게, 카페도 들르고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 1281
+        },
+        {
+          "text": "부산 서면 빈티지 가게",
+          "ok": true,
+          "problems": [],
+          "ms": 1375
+        },
+        {
+          "text": "아메카지 좋아하는데 성수에서 비싸도 좋은 브랜드 위주로",
+          "ok": true,
+          "problems": [],
+          "ms": 1296
+        },
+        {
+          "text": "데님 찾으러 동대문 가고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 1735
+        },
+        {
+          "text": "가방이랑 신발 보러 명동 4시간",
+          "ok": true,
+          "problems": [],
+          "ms": 1514
+        },
+        {
+          "text": "이태원 빈티지 다섯 군데",
+          "ok": true,
+          "problems": [],
+          "ms": 1657
+        },
+        {
+          "text": "연남동 아메카지 워크웨어 쪽으로 돌아볼래",
+          "ok": true,
+          "problems": [],
+          "ms": 1327
+        },
+        {
+          "text": "강남역 근처 캐주얼 3곳",
+          "ok": true,
+          "problems": [],
+          "ms": 1843
+        },
+        {
+          "text": "성수동에서 싸게 구제 옷 사고 싶다 반나절",
+          "ok": true,
+          "problems": [],
+          "ms": 23750
+        },
+        {
+          "text": "건대 스트릿 브랜드 4곳 2시간",
+          "ok": true,
+          "problems": [],
+          "ms": 7375
+        },
+        {
+          "text": "신촌 미니멀 저렴하게",
+          "ok": true,
+          "problems": [],
+          "ms": 4296
+        },
+        {
+          "text": "을지로 빈티지 샵 최대한 많이",
+          "ok": true,
+          "problems": [],
+          "ms": 2016
+        },
+        {
+          "text": "고프코어 아웃도어 느낌 옷 보러 갈래, 성수",
+          "ok": true,
+          "problems": [],
+          "ms": 1406
+        },
+        {
+          "text": "명동 아우터 위주로 3시간 반",
+          "ok": true,
+          "problems": [],
+          "ms": 1360
+        },
+        {
+          "text": "홍대 Y2K 빈티지 6곳 저렴하게 카페도",
+          "ok": true,
+          "problems": [],
+          "ms": 1842
+        },
+        {
+          "text": "도쿄 시모키타자와 빈티지 돌고 싶어",
+          "ok": true,
+          "problems": [],
+          "ms": 1578
+        },
+        {
+          "text": "동대문에서 워크웨어 옷 구경",
+          "ok": true,
+          "problems": [],
+          "ms": 1218
+        },
+        {
+          "text": "한남 디자이너 브랜드, 비싸도 괜찮아",
+          "ok": true,
+          "problems": [],
+          "ms": 1610
+        },
+        {
+          "text": "망원 구제 3곳 1시간 반",
+          "ok": true,
+          "problems": [],
+          "ms": 1577
+        },
+        {
+          "text": "성수에서 점심 먹고 미니멀 옷 4곳",
+          "ok": true,
+          "problems": [],
+          "ms": 1297
+        },
+        {
+          "text": "홍대 빈티지 돌다가 맛집도 하나 넣어줘",
+          "ok": true,
+          "problems": [],
+          "ms": 3483
+        },
+        {
+          "text": "그냥 아무 데나 옷 구경",
+          "ok": true,
+          "problems": [],
+          "ms": 1358
+        }
+      ]
+    },
+    {
+      "set": "edit",
+      "passed": 20,
+      "run": 20,
+      "planned": 20,
+      "score": 1.0,
+      "complete": true,
+      "threshold": 0.85,
+      "p50_ms": 1422,
+      "max_ms": 31625,
+      "results": [
+        {
+          "text": "3번 빼줘",
+          "ok": true,
+          "problems": [],
+          "ms": 1422
+        },
+        {
+          "text": "마지막 거 빼",
+          "ok": true,
+          "problems": [],
+          "ms": 1327
+        },
+        {
+          "text": "2번 다른 데로",
+          "ok": true,
+          "problems": [],
+          "ms": 1953
+        },
+        {
+          "text": "2번 말고 더 싼 데",
+          "ok": true,
+          "problems": [],
+          "ms": 1266
+        },
+        {
+          "text": "4번을 맨 앞으로",
+          "ok": true,
+          "problems": [],
+          "ms": 1655
+        },
+        {
+          "text": "2번이랑 3번 바꿔",
+          "ok": true,
+          "problems": [],
+          "ms": 1391
+        },
+        {
+          "text": "신발 가게 하나 추가",
+          "ok": true,
+          "problems": [],
+          "ms": 1328
+        },
+        {
+          "text": "좀 더 가깝게",
+          "ok": true,
+          "problems": [],
+          "ms": 1375
+        },
+        {
+          "text": "내 취향 위주로 다시 짜줘",
+          "ok": true,
+          "problems": [],
+          "ms": 1500
+        },
+        {
+          "text": "3번 빼고 가방 가게 넣어줘",
+          "ok": true,
+          "problems": [],
+          "ms": 1843
+        },
+        {
+          "text": "1번 빈티지 가게로 바꿔",
+          "ok": true,
+          "problems": [],
+          "ms": 1843
+        },
+        {
+          "text": "브론즈윅 빼",
+          "ok": true,
+          "problems": [],
+          "ms": 1187
+        },
+        {
+          "text": "모노하 성수 대신 다른 곳",
+          "ok": true,
+          "problems": [],
+          "ms": 1577
+        },
+        {
+          "text": "덜 걷게 해줘",
+          "ok": true,
+          "problems": [],
+          "ms": 13000
+        },
+        {
+          "text": "편집숍 하나 더 넣어",
+          "ok": true,
+          "problems": [],
+          "ms": 1343
+        },
+        {
+          "text": "첫 번째랑 두 번째 빼줘",
+          "ok": true,
+          "problems": [],
+          "ms": 31625
+        },
+        {
+          "text": "옴니피플을 마지막으로 보내",
+          "ok": true,
+          "problems": [],
+          "ms": 1218
+        },
+        {
+          "text": "5번을 더 싼 데로",
+          "ok": true,
+          "problems": [],
+          "ms": 1234
+        },
+        {
+          "text": "오늘 날씨 어때?",
+          "ok": true,
+          "problems": [],
+          "ms": 1546
+        },
+        {
+          "text": "4번 빼고 1번이랑 2번 순서 바꿔",
+          "ok": true,
+          "problems": [],
+          "ms": 1218
+        }
+      ]
+    }
+  ]
+}

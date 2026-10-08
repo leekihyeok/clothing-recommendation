@@ -1,0 +1,35 @@
+# Local dev infrastructure only: Postgres (PostGIS + pgvector) and Redis.
+# The api, client and model services run directly on the host (npm run dev).
+# Host ports are 5433/6380 so they don't clash with the Postgres/Redis already installed on this PC.
+name: clothing-reco
+
+services:
+  db:
+    build: ./postgres
+    environment:
+      POSTGRES_USER: cr
+      POSTGRES_PASSWORD: cr_dev_password
+      POSTGRES_DB: clothing_reco
+    ports:
+      - "5433:5432"
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql/<major>/, so mount the parent.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cr -d clothing_reco"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  redis-data:

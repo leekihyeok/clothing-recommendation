@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "styles": [
+    { "id": "vintage", "label": "빈티지" },
+    { "id": "secondhand", "label": "구제" },
+    { "id": "street", "label": "스트릿" },
+    { "id": "minimal", "label": "미니멀" },
+    { "id": "amekaji", "label": "아메카지" },
+    { "id": "gorpcore", "label": "고프코어" },
+    { "id": "y2k", "label": "Y2K" },
+    { "id": "designer", "label": "디자이너" },
+    { "id": "casual", "label": "캐주얼" },
+    { "id": "workwear", "label": "워크웨어" }
+  ],
+  "items": [
+    { "id": "outer", "label": "아우터" },
+    { "id": "top", "label": "상의" },
+    { "id": "denim", "label": "데님" },
+    { "id": "bottom", "label": "하의" },
+    { "id": "shoes", "label": "신발" },
+    { "id": "bag", "label": "가방" },
+    { "id": "accessory", "label": "액세서리" }
+  ],
+  "budgets": [
+    { "id": "any", "label": "상관없음" },
+    { "id": "low", "label": "저렴" },
+    { "id": "mid", "label": "중간" },
+    { "id": "high", "label": "고가" }
+  ],
+  "stopCountOptions": [3, 4, 5, 6],
+  "timeBudgetOptionsMin": [60, 120, 240],
+  "defaults": {
+    "stopCount": 4,
+    "timeBudgetMin": 120,
+    "travelMode": "walk",
+    "budget": "any"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "stops": [
+    {"order": 1, "name": "무신사 엠프티 성수", "category": "select_shop", "summary": "다채로운 브랜드 콜라보 팝업", "price_range": "high"},
+    {"order": 2, "name": "모노하 성수", "category": "select_shop", "summary": "미니멀 룩 편집숍", "price_range": "mid"},
+    {"order": 3, "name": "EQL 성수점", "category": "select_shop", "summary": "디자이너 브랜드 편집숍", "price_range": "high"},
+    {"order": 4, "name": "옴니피플 그라운드 성수", "category": "vintage", "summary": "빈티지 셀렉트", "price_range": "mid"},
+    {"order": 5, "name": "브론즈윅", "category": "brand", "summary": "아메카지 브랜드 매장", "price_range": "mid"}
+  ],
+  "cases": [
+    {"text": "3번 빼줘", "expect": [[{"op": "remove", "order": 3}]]},
+    {"text": "마지막 거 빼", "expect": [[{"op": "remove", "order": 5}]]},
+    {"text": "2번 다른 데로", "expect": [[{"op": "replace", "order": 2}]]},
+    {"text": "2번 말고 더 싼 데", "expect": [[{"op": "replace", "order": 2, "want_budget": "low"}]]},
+    {"text": "4번을 맨 앞으로", "expect": [[{"op": "move", "order": 4, "to_order": 1}]]},
+    {"text": "2번이랑 3번 바꿔", "expect": [[{"op": "move", "order": 2, "to_order": 3}], [{"op": "move", "order": 3, "to_order": 2}]]},
+    {"text": "신발 가게 하나 추가", "expect": [[{"op": "add", "want_item": "shoes"}]]},
+    {"text": "좀 더 가깝게", "expect": [[{"op": "replan", "prefer": "nearby"}]]},
+    {"text": "내 취향 위주로 다시 짜줘", "expect": [[{"op": "replan", "prefer": "taste"}]]},
+    {"text": "3번 빼고 가방 가게 넣어줘", "expect": [[{"op": "remove", "order": 3}, {"op": "add", "want_item": "bag"}], [{"op": "replace", "order": 3, "want_item": "bag"}]]},
+    {"text": "1번 빈티지 가게로 바꿔", "expect": [[{"op": "replace", "order": 1, "want_category": "vintage"}], [{"op": "replace", "order": 1, "want_style": "vintage"}]]},
+    {"text": "브론즈윅 빼", "expect": [[{"op": "remove", "order": 5}]]},
+    {"text": "모노하 성수 대신 다른 곳", "expect": [[{"op": "replace", "order": 2}]]},
+    {"text": "덜 걷게 해줘", "expect": [[{"op": "replan", "prefer": "nearby"}]]},
+    {"text": "편집숍 하나 더 넣어", "expect": [[{"op": "add", "want_category": "select_shop"}]]},
+    {"text": "첫 번째랑 두 번째 빼줘", "expect": [[{"op": "remove", "order": 1}, {"op": "remove", "order": 2}], [{"op": "remove", "order": 2}, {"op": "remove", "order": 1}]]},
+    {"text": "옴니피플을 마지막으로 보내", "expect": [[{"op": "move", "order": 4, "to_order": 5}]]},
+    {"text": "5번을 더 싼 데로", "expect": [[{"op": "replace", "order": 5, "want_budget": "low"}]]},
+    {"text": "오늘 날씨 어때?", "expect": [[]]},
+    {"text": "4번 빼고 1번이랑 2번 순서 바꿔", "expect": [[{"op": "remove", "order": 4}, {"op": "move", "order": 1, "to_order": 2}], [{"op": "remove", "order": 4}, {"op": "move", "order": 2, "to_order": 1}]]}
+  ]
+}
