@@ -2,16 +2,20 @@ import { ApolloClient, ApolloLink, ApolloProvider, HttpLink, InMemoryCache } fro
 import { onError } from '@apollo/client/link/error';
 import { requireLogin } from './me/LoginModal';
 import { anonId } from './me/anonId';
+import { getLang } from './i18n';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AdminPage } from './admin/AdminPage';
 import { App } from './App';
 import './styles/theme.scss';
 
-const client = new ApolloClient({
+export const client = new ApolloClient({
   // Every request carries this browser's anonymous id, so "내 가게" (saved / visited shops) knows whose it is.
   link: new ApolloLink((operation, forward) => {
-    operation.setContext(({ headers = {} }: { headers?: Record<string, string> }) => ({ headers: { ...headers, 'x-route-anon': anonId() } }));
+    // …and the language, so course notes, reasons and shop texts come back in it.
+    operation.setContext(({ headers = {} }: { headers?: Record<string, string> }) => ({
+      headers: { ...headers, 'x-route-anon': anonId(), 'x-route-lang': getLang() },
+    }));
     return forward(operation);
   })
     // Saving, reviews and my page need a Kakao login: the API answers UNAUTHENTICATED and the login dialog opens.

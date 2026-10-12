@@ -4,6 +4,8 @@ import catalog from '../catalog.json';
 export interface Option<T extends string = string> {
   id: T;
   label: string;
+  /** English label (the client's English mode; the API answers in the asked language) */
+  labelEn?: string;
 }
 
 export type TravelMode = 'walk';

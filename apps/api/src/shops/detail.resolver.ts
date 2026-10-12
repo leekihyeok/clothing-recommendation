@@ -6,6 +6,9 @@ import { ShopPhotosService } from './photos.service';
 import { MeService, type Request } from '../me/me.service';
 import { Review, ShopDetail } from './detail.model';
 import { ShopDetailService } from './detail.service';
+import { DbService } from '../infra/db.service';
+import { RateLimitService } from '../infra/rate-limit.service';
+import { SimilarShop, similarShops } from './similar';
 
 @Resolver(() => ShopDetail)
 export class ShopDetailResolver {
@@ -14,7 +17,14 @@ export class ShopDetailResolver {
     private readonly me: MeService,
     private readonly owners: OwnersService,
     private readonly photoSearch: ShopPhotosService,
+    private readonly db: DbService,
+    private readonly limits: RateLimitService,
   ) {}
+
+  @ResolveField(() => [SimilarShop], { description: '비슷한 가게 ("여기 좋았다면"): 소개·스타일이 비슷한 곳, 가까운 곳 조금 앞으로' })
+  similar(@Parent() shop: ShopDetail, @Args('limit', { type: () => Int, defaultValue: 6 }) limit: number) {
+    return similarShops(this.db.pool, shop.id, Math.min(12, Math.max(1, limit)));
+  }
 
   @ResolveField(() => [ShopPhoto], { description: '가게 사진 (카카오 이미지 검색, 이 가게를 다룬 글의 사진 먼저). 사장님 사진은 owner.photos' })
   photos(@Parent() shop: ShopDetail) {
@@ -53,7 +63,9 @@ export class ShopDetailResolver {
     @Args('body', { type: () => String, nullable: true }) body: string | undefined,
     @Context('req') req: Request,
   ): Promise<Review> {
-    return this.detail.save(shopId, await this.me.requireLogin(req), rating, body);
+    const userId = await this.me.requireLogin(req);
+    await this.limits.hit('review', req, userId);
+    return this.detail.save(shopId, userId, rating, body);
   }
 
   @Mutation(() => Boolean, { description: '내 후기 지우기' })

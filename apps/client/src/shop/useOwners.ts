@@ -10,7 +10,7 @@ const MineDoc = graphql(`
 
 const ClaimsDoc = graphql(`
   query OwnerClaims($status: String!) {
-    ownerClaims(status: $status) { id status businessNo ownerName contact message nts createdAt reviewNote shopId shopName roadAddress nickname }
+    ownerClaims(status: $status) { id status businessNo ownerName contact message nts createdAt reviewNote shopId shopName roadAddress nickname hasDocument }
   }
 `);
 
@@ -19,6 +19,17 @@ const ReviewDoc = graphql(`
     reviewOwnerClaim(id: $id, approve: $approve, note: $note)
   }
 `);
+
+const ClaimDocumentDoc = graphql(`
+  query OwnerClaimDocument($id: ID!) {
+    ownerClaimDocument(id: $id)
+  }
+`);
+
+/** Admin: one claim's 사업자등록증 photo (data URL), asked for only when opened. */
+export function useClaimDocument(id: string | null) {
+  return useQuery(ClaimDocumentDoc, { variables: { id: id ?? '' }, skip: !id, fetchPolicy: 'network-only' });
+}
 
 export function useMyOwnerStatus(skip = false) {
   return useQuery(MineDoc, { skip, fetchPolicy: 'cache-and-network' });

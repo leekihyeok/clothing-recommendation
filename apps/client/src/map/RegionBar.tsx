@@ -1,6 +1,7 @@
 import { MapPin, X } from '@phosphor-icons/react';
 import { useState } from 'react';
 import { CATEGORY_BY_ID } from './categories';
+import { t } from '../i18n';
 
 export interface RegionItem {
   id: string;
@@ -38,7 +39,7 @@ export function RegionBar({
     <section className="section" aria-labelledby="area-label">
       <h2 className="eyebrow" id="area-label">
         <span>Area</span>
-        <span className="ko">지역</span>
+        <span className="ko">{t('지역', 'Where to start')}</span>
       </h2>
       <div className="chip-row">
         {shown.map((r) => (
@@ -54,23 +55,23 @@ export function RegionBar({
         ))}
         {regions.length > FIRST && (
           <button type="button" className="chip is-more" aria-expanded={all} onClick={() => setAll(!all)}>
-            {all ? '접기' : `${regions.length - FIRST}곳 더 보기`}
+            {all ? t('접기', 'Show less') : t(`${regions.length - FIRST}곳 더 보기`, `${regions.length - FIRST} more`)}
           </button>
         )}
       </div>
       <button type="button" className={`chip pick-chip${picking || picked ? ' is-selected' : ''}`} aria-pressed={picking || picked} onClick={picked ? onClearPick : onPick}>
         <MapPin size={16} weight={picked ? 'fill' : 'regular'} aria-hidden />
-        {picked ? '지도에서 고른 위치' : picking ? '지도를 눌러 주세요…' : '지도에서 출발점 고르기'}
-        {picked && <X size={14} aria-label="고른 위치 지우기" />}
+        {picked ? t('지도에서 고른 위치', 'Spot picked on the map') : picking ? t('지도를 눌러 주세요…', 'Tap the map…') : t('지도에서 출발점 고르기', 'Pick a start on the map')}
+        {picked && <X size={14} aria-label={t('고른 위치 지우기', 'Clear picked spot')} />}
       </button>
       {selected ? (
         <div className="region-note">
           <strong>{selected.name}</strong>
-          <span className="meta tabular"> · {strongest(selected)} · {selected.shopCount.toLocaleString()}곳</span>
+          <span className="meta tabular"> · {strongest(selected)} · {t(`${selected.shopCount.toLocaleString()}곳`, `${selected.shopCount.toLocaleString()} ${selected.shopCount === 1 ? 'shop' : 'shops'}`)}</span>
           {selected.intro && <div className="meta mt-1">{selected.intro}</div>}
         </div>
       ) : (
-        !picked && <p className="hint">지역이나 출발점을 고르지 않으면 지도 가운데에서 시작해요.</p>
+        !picked && <p className="hint">{t('지역이나 출발점을 고르지 않으면 지도 가운데에서 시작해요.', 'With no area or start picked, we start from the middle of the map.')}</p>
       )}
     </section>
   );
@@ -79,5 +80,5 @@ export function RegionBar({
 // The category this area has unusually many of, rather than "일반" which dominates everywhere.
 function strongest(r: RegionItem): string {
   const top = r.categories.find((c) => c.category !== 'general') ?? r.categories[0];
-  return top ? `${CATEGORY_BY_ID[top.category]?.label ?? top.category} ${top.count}곳` : '';
+  return top ? `${CATEGORY_BY_ID[top.category]?.label ?? top.category} ${t(`${top.count}곳`, String(top.count))}` : '';
 }

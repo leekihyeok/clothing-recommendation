@@ -2,11 +2,14 @@ import { BadRequestException } from '@nestjs/common';
 import { Args, Context, Field, Float, ID, Int, Mutation, ObjectType, Resolver } from '@nestjs/graphql';
 import { DbService } from '../infra/db.service';
 import { EventsService } from '../infra/events.service';
+import { RateLimitService } from '../infra/rate-limit.service';
 import { ModelClient } from '../infra/model.client';
 import { MeService, type Request } from '../me/me.service';
 import { LatLng } from '../regions/regions.resolver';
 import { ShopHit } from '../shops/search.resolver';
 import { searchShops } from '../shops/search';
+import { BrandRef, resolveBrands } from '../shops/brands';
+import { L } from '../infra/lang';
 
 @ObjectType()
 export class StyleWeight {
@@ -64,6 +67,24 @@ export class ParsedPrompt {
   @Field(() => [String], { description: '꼭 넣어 달라고 했지만 찾지 못한 이름' })
   mustNotFound: string[];
 
+  @Field({ nullable: true, description: '말한 출발 시각 ("2026-10-17T14:00", 서울)' })
+  startAt?: string;
+
+  @Field({ nullable: true, description: '말한 끝낼 시각 ("18:00")' })
+  endBy?: string;
+
+  @Field(() => LatLng, { nullable: true, description: '말한 끝나는 장소의 좌표' })
+  endPoint?: LatLng;
+
+  @Field({ nullable: true })
+  endName?: string;
+
+  @Field({ description: '출발한 곳으로 돌아오기' })
+  roundTrip: boolean;
+
+  @Field(() => [BrandRef], { description: '글에 나온 브랜드 (브랜드 사전에서 찾은 것)' })
+  brands: BrandRef[];
+
   @Field(() => [String], { description: '지금은 못 하는 요청 (서울 밖, 대중교통 …)' })
   unsupported: string[];
 
@@ -96,11 +117,17 @@ interface ModelParse {
     wants_cafe: boolean;
     wants_food?: boolean;
     must_shops?: string[];
+    brands?: string[];
     gender?: string;
+    end_time?: string | null;
+    end_place?: string | null;
+    round_trip?: boolean;
     unsupported: string[];
     summary: string;
   };
   place_point: { lat: number; lng: number; name: string } | null;
+  end_point?: { lat: number; lng: number; name: string } | null;
+  start_at?: string | null;
 }
 
 const MAX_IMAGE_BASE64 = 6_000_000; // ~4.5 MB; the client resizes photos to ~768px first
@@ -112,6 +139,7 @@ export class ParseResolver {
     private readonly model: ModelClient,
     private readonly me: MeService,
     private readonly events: EventsService,
+    private readonly limits: RateLimitService,
   ) {}
 
   @Mutation(() => ParsedPrompt, { description: '자유롭게 쓴 글 → 요청서 초안 (AI)' })
@@ -119,9 +147,11 @@ export class ParseResolver {
     const trimmed = text.trim();
     if (!trimmed) throw new BadRequestException('원하는 코스를 적어 주세요');
     if (trimmed.length > 500) throw new BadRequestException('500자 안으로 적어 주세요');
+    const userId = await this.me.userId(req, false);
+    await this.limits.hit('ai', req, userId);
     return this.events.timed(
       'parse_text',
-      { userId: await this.me.userId(req, false), data: { chars: trimmed.length } },
+      { userId, data: { chars: trimmed.length } },
       () => this.parse(trimmed),
       (p) => ({ data: { place: !!(p.regionId || p.point), styles: p.styles.length, unsupported: p.unsupported.length } }),
     );
@@ -141,6 +171,7 @@ export class ParseResolver {
       : res.place_point ?? undefined;
     const names = [...new Set((p.must_shops ?? []).map((n) => n.trim()).filter(Boolean))].slice(0, 8);
     const hits = await Promise.all(names.map((n) => searchShops(this.db.pool, n, near, 1, true).then((h) => h[0])));
+    const brands = await resolveBrands(this.db.pool, [...new Set((p.brands ?? []).map((b) => b.trim()).filter(Boolean))].slice(0, 5));
     return {
       mustShops: hits.filter((h): h is ShopHit => !!h),
       mustNotFound: names.filter((_, i) => !hits[i]),
@@ -157,7 +188,18 @@ export class ParseResolver {
       wantsCafe: p.wants_cafe,
       wantsFood: p.wants_food === true,
       gender: p.gender === 'men' || p.gender === 'women' ? p.gender : 'any',
-      unsupported: p.unsupported,
+      startAt: res.start_at ?? undefined,
+      endBy: p.end_time ?? undefined,
+      endPoint: res.end_point ? { lat: res.end_point.lat, lng: res.end_point.lng } : undefined,
+      endName: res.end_point?.name ?? undefined,
+      roundTrip: p.round_trip === true,
+      brands: brands.found,
+      // A finish place we couldn't find on the map: say so rather than drop it silently.
+      unsupported: [
+        ...p.unsupported,
+        ...(p.end_place && !p.round_trip && !res.end_point ? [L(`끝나는 곳 ‘${p.end_place}’을 지도에서 찾지 못했어요`, `Couldn't find “${p.end_place}” on the map for the finish`)] : []),
+        ...brands.missing.map((b) => L(`‘${b}’을 다루는 가게는 아직 몰라요`, `No shops known yet that carry “${b}”`)),
+      ],
       summary: p.summary,
     };
   }
@@ -170,9 +212,11 @@ export class ParseResolver {
   ): Promise<PhotoStyles> {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new BadRequestException('JPG, PNG, WEBP 사진만 돼요');
     if (imageBase64.length > MAX_IMAGE_BASE64) throw new BadRequestException('사진이 너무 커요');
+    const userId = await this.me.userId(req, false);
+    await this.limits.hit('ai', req, userId);
     return this.events.timed(
       'parse_photo',
-      { userId: await this.me.userId(req, false) },
+      { userId },
       () => this.model.post<PhotoStyles>('/photo', { image_base64: imageBase64, mime_type: mimeType }, 30000),
       (p) => ({ data: { styles: p.styles.length } }),
     );

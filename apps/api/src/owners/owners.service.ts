@@ -1,9 +1,9 @@
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DbService } from '../infra/db.service';
-import { UPLOAD_DIR } from '../me/profile.service';
+import { PRIVATE_DIR, UPLOAD_DIR } from '../me/profile.service';
 import { mediaUrl } from '../shops/detail.service';
 import { cleanName } from '../shops/names';
 import { DISPLAY_NAME_SQL } from '../shops/shops.resolver';
@@ -17,6 +17,9 @@ export interface HoursDay {
 const NTS_URL = 'https://api.odcloud.kr/api/nts-businessman/v1/status';
 const MAX_PHOTOS = 6;
 const MAX_PHOTO_BYTES = 1_500_000; // the page sends ~1200 px JPEGs
+// 사업자등록증: a ~1600 px JPEG so the small print stays readable.
+const MAX_DOC_BYTES = 3_000_000;
+const CLAIM_DOCS = 'claims';
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_NAMES = ['월', '화', '수', '목', '금', '토', '일'];
 
@@ -90,8 +93,14 @@ export class OwnersService {
     }
   }
 
-  async claim(userId: string, shopId: string, input: { businessNo: string; ownerName: string; contact: string; message?: string }) {
+  async claim(userId: string, shopId: string, input: { businessNo: string; ownerName: string; contact: string; message?: string; documentBase64?: string }) {
     const no = input.businessNo.replace(/\D/g, '');
+    // The business registration certificate: the admin compares its name, owner and number with the claim (the tax
+    // service's status API isn't available to us). JPEG only, kept privately, deleted once the claim is decided.
+    const doc = input.documentBase64 ? Buffer.from(input.documentBase64, 'base64') : null;
+    if (!doc?.length) throw new BadRequestException('사업자등록증 사진을 올려 주세요');
+    if (doc.length > MAX_DOC_BYTES) throw new BadRequestException('사진이 너무 커요. 다른 사진을 골라 주세요');
+    if (!(doc[0] === 0xff && doc[1] === 0xd8 && doc[2] === 0xff)) throw new BadRequestException('JPG 사진만 올릴 수 있어요');
     if (!validBusinessNo(no)) throw new BadRequestException('사업자등록번호 10자리를 확인해 주세요');
     const name = input.ownerName.trim();
     const contact = input.contact.trim();
@@ -115,7 +124,12 @@ export class OwnersService {
         if (e.code === '23503') throw new BadRequestException('가게를 찾지 못했어요');
         throw e;
       });
-    return { id: r.rows[0].id, status: 'pending', checked: !!nts };
+    const id = r.rows[0].id;
+    const rel = `${CLAIM_DOCS}/${id}.jpg`;
+    await mkdir(join(PRIVATE_DIR, CLAIM_DOCS), { recursive: true });
+    await writeFile(join(PRIVATE_DIR, rel), doc);
+    await this.db.pool.query('UPDATE shop_owner_claims SET doc_path = $2 WHERE id = $1', [id, rel]);
+    return { id, status: 'pending', checked: !!nts };
   }
 
   async myClaims(userId: string) {
@@ -220,19 +234,47 @@ export class OwnersService {
   async removePhoto(userId: string, shopId: string, url: string): Promise<string[]> {
     await this.requireOwner(userId, shopId);
     const rel = url.replace(/^\/media\//, '');
-    const r = await this.db.pool.query<{ photos: string[] }>(
-      `UPDATE shop_owner_info SET photos = array_remove(photos, $2), updated_at = now() WHERE shop_id = $1 RETURNING photos`,
+    // Only a photo this shop actually has is removed, and its file only if it resolves inside the shop's own folder
+    // (a crafted "shops/<id>/../../.env" must not delete anything).
+    const r = await this.db.pool.query<{ photos: string[]; had: boolean }>(
+      `UPDATE shop_owner_info SET photos = array_remove(photos, $2), updated_at = now()
+        WHERE shop_id = $1 AND $2 = ANY(photos) RETURNING photos, true AS had`,
       [shopId, rel],
     );
-    if (rel.startsWith(`shops/${shopId}/`)) await unlink(join(UPLOAD_DIR, rel)).catch(() => undefined);
-    return (r.rows[0]?.photos ?? []).map((p) => mediaUrl(p)!);
+    const dir = resolve(UPLOAD_DIR, 'shops', shopId) + sep;
+    const file = resolve(UPLOAD_DIR, rel);
+    if (r.rows[0]?.had && file.startsWith(dir)) await unlink(file).catch(() => undefined);
+    const left = r.rows[0]?.photos
+      ?? (await this.db.pool.query<{ photos: string[] }>('SELECT photos FROM shop_owner_info WHERE shop_id = $1', [shopId])).rows[0]?.photos
+      ?? [];
+    return left.map((p) => mediaUrl(p)!);
   }
 
   // ---------- admin ----------
 
+  /** The claim's 사업자등록증 as a data URL, for the admin page only (the file isn't served anywhere). */
+  async claimDocument(claimId: string): Promise<string | null> {
+    const r = await this.db.pool.query<{ doc_path: string | null }>('SELECT doc_path FROM shop_owner_claims WHERE id = $1', [claimId]);
+    const rel = r.rows[0]?.doc_path;
+    if (!rel) return null;
+    const buf = await readFile(join(PRIVATE_DIR, rel)).catch(() => null);
+    return buf ? `data:image/jpeg;base64,${buf.toString('base64')}` : null;
+  }
+
+  /** Once a claim is decided its certificate photo is gone (file and path). */
+  async removeDocument(claimId: string): Promise<void> {
+    const r = await this.db.pool.query<{ doc_path: string | null }>(
+      `UPDATE shop_owner_claims SET doc_path = NULL, doc_removed_at = now() WHERE id = $1 AND doc_path IS NOT NULL
+       RETURNING (SELECT doc_path FROM shop_owner_claims WHERE id = $1)`,
+      [claimId],
+    );
+    const rel = r.rows[0]?.doc_path;
+    if (rel) await unlink(join(PRIVATE_DIR, rel)).catch(() => undefined);
+  }
+
   async claims(status: string) {
     const r = await this.db.pool.query(
-      `SELECT c.id::text, c.status, c.business_no, c.owner_name, c.contact, c.message, c.nts, c.created_at, c.review_note,
+      `SELECT c.id::text, c.status, c.business_no, c.owner_name, c.contact, c.message, c.nts, c.created_at, c.review_note, c.doc_path IS NOT NULL AS has_doc,
               s.id::text AS shop_id, ${DISPLAY_NAME_SQL} AS shop_name, s.road_address, coalesce(u.nickname, '') AS nickname
        FROM shop_owner_claims c JOIN shops s ON s.id = c.shop_id JOIN users u ON u.id = c.user_id
        WHERE c.status = $1 ORDER BY c.created_at LIMIT 100`,
@@ -240,7 +282,8 @@ export class OwnersService {
     );
     return r.rows.map((x) => ({
       id: x.id, status: x.status, businessNo: x.business_no, ownerName: x.owner_name, contact: x.contact, message: x.message ?? undefined,
-      nts: x.nts ? `${x.nts.b_stt || '미등록'}${x.nts.tax_type ? ` · ${x.nts.tax_type}` : ''}` : '확인 안 함 (국세청 API 키 없음)',
+      nts: x.nts ? `${x.nts.b_stt || '미등록'}${x.nts.tax_type ? ` · ${x.nts.tax_type}` : ''}` : '국세청 조회 안 씀 · 사업자등록증으로 확인',
+      hasDocument: x.has_doc,
       createdAt: x.created_at, reviewNote: x.review_note ?? undefined, shopId: x.shop_id, shopName: cleanName(x.shop_name),
       roadAddress: x.road_address ?? undefined, nickname: x.nickname,
     }));
@@ -263,6 +306,7 @@ export class OwnersService {
         );
       }
       await client.query('COMMIT');
+      await this.removeDocument(claimId);
       return true;
     } catch (e) {
       await client.query('ROLLBACK');

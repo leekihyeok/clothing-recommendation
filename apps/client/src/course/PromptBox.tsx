@@ -1,8 +1,12 @@
 import { ArrowRight, Camera, Sparkle, Warning } from '@phosphor-icons/react';
 import { useRef, useState } from 'react';
 import type { Origin, Planner } from './usePlanner';
+import { getLang, t } from '../i18n';
 
-const EXAMPLES = ['망원역 근처 빈티지랑 워크웨어 5곳, 3시간', '성수에서 미니멀한 옷 구경, 저렴하게', '홍대 스트릿 신발 위주로 반나절'];
+const EXAMPLES = () =>
+  getLang() === 'en'
+    ? ['5 vintage shops near Mangwon, 3 hrs', 'Minimal in Seongsu, on a budget', 'Streetwear in Hongdae, half a day']
+    : ['망원역 근처 빈티지랑 워크웨어 5곳, 3시간', '성수에서 미니멀한 옷 구경, 저렴하게', '홍대 스트릿 신발 위주로 반나절'];
 
 interface Props {
   planner: Planner;
@@ -30,12 +34,19 @@ export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) 
     const res = await planner.fromText(value.trim());
     if (!res) return;
     const { parsed, form } = res;
-    const notes = [...parsed.unsupported.map((u) => `${u}는 아직 못 해요`)];
-    if (parsed.wantsCafe) notes.push('가는 길에 들를 카페를 넣었어요');
-    if (parsed.wantsFood) notes.push('가는 길에 들를 맛집을 넣었어요');
-    if (parsed.gender === 'men' || parsed.gender === 'women') notes.push(parsed.gender === 'men' ? '남성복 가게 위주로 골랐어요' : '여성복 가게 위주로 골랐어요');
-    if (parsed.mustShops.length) notes.push(`꼭 넣을 가게: ${parsed.mustShops.map((m) => m.name).join(', ')}`);
-    if (parsed.mustNotFound.length) notes.push(`${parsed.mustNotFound.join(', ')}은(는) 찾지 못했어요. ‘꼭 넣을 가게’에서 이름으로 찾아 주세요`);
+    const notes = [...parsed.unsupported.map((u) => t(`${u}는 아직 못 해요`, `Can’t do “${u}” yet`))];
+    if (parsed.wantsCafe) notes.push(t('가는 길에 들를 카페를 넣었어요', 'Added a café stop along the way'));
+    if (parsed.wantsFood) notes.push(t('가는 길에 들를 맛집을 넣었어요', 'Added a food stop along the way'));
+    if (parsed.gender === 'men' || parsed.gender === 'women')
+      notes.push(parsed.gender === 'men' ? t('남성복 가게 위주로 골랐어요', 'Picked mostly menswear shops') : t('여성복 가게 위주로 골랐어요', 'Picked mostly womenswear shops'));
+    if (parsed.mustShops.length) notes.push(t(`꼭 넣을 가게: ${parsed.mustShops.map((m) => m.name).join(', ')}`, `Must-visit: ${parsed.mustShops.map((m) => m.name).join(', ')}`));
+    if (parsed.mustNotFound.length)
+      notes.push(
+        t(
+          `${parsed.mustNotFound.join(', ')}은(는) 찾지 못했어요. ‘꼭 넣을 가게’에서 이름으로 찾아 주세요`,
+          `Couldn’t find ${parsed.mustNotFound.join(', ')}. Try searching by name under “Must-visit shops”`,
+        ),
+      );
     setEcho({ summary: parsed.summary, notes });
     onEcho({ text: value.trim(), summary: parsed.summary, notes });
     onRegion(parsed.regionId ?? null);
@@ -50,7 +61,10 @@ export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) 
   async function onPhoto(file: File | undefined) {
     if (!file) return;
     const description = await planner.fromPhoto(file);
-    if (description) setEcho({ summary: `사진: ${description}`, notes: ['사진에서 찾은 스타일로 칩을 골랐어요. 지역을 고르고 코스를 짜 보세요'] });
+    if (description) setEcho({
+        summary: t(`사진: ${description}`, `Photo: ${description}`),
+        notes: [t('사진에서 찾은 스타일로 칩을 골랐어요. 지역을 고르고 코스를 짜 보세요', 'Picked styles from your photo. Choose an area and plan your course')],
+      });
     if (fileInput.current) fileInput.current.value = '';
   }
 
@@ -58,7 +72,7 @@ export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) 
     <section className="section prompt" aria-labelledby="prompt-label">
       <h2 className="eyebrow" id="prompt-label">
         <span>Ask</span>
-        <span className="ko">글로 말하기</span>
+        <span className="ko">{t('글로 말하기', 'Just tell us')}</span>
       </h2>
       <form
         className="prompt-box"
@@ -68,21 +82,21 @@ export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) 
         }}
       >
         <label htmlFor="prompt-input" className="visually-hidden">
-          원하는 코스
+          {t('원하는 코스', 'The course you want')}
         </label>
         <input
           id="prompt-input"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="어떤 코스를 원하세요? 예) 성수 빈티지 5곳"
+          placeholder={t('어떤 코스를 원하세요? 예) 성수 빈티지 5곳', 'What kind of course? e.g. 5 vintage shops in Seongsu')}
           maxLength={500}
           enterKeyHint="go"
           autoComplete="off"
         />
-        <button type="button" className="prompt-icon" aria-label="옷 사진으로 스타일 찾기" onClick={() => fileInput.current?.click()} disabled={planner.busy}>
+        <button type="button" className="prompt-icon" aria-label={t('옷 사진으로 스타일 찾기', 'Find a style from a photo')} onClick={() => fileInput.current?.click()} disabled={planner.busy}>
           <Camera size={20} />
         </button>
-        <button type="submit" className="prompt-go" aria-label="이 글로 코스 짜기" disabled={planner.busy || !text.trim()}>
+        <button type="submit" className="prompt-go" aria-label={t('이 글로 코스 짜기', 'Plan from this')} disabled={planner.busy || !text.trim()}>
           <ArrowRight size={20} />
         </button>
         <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => onPhoto(e.target.files?.[0])} />
@@ -90,7 +104,7 @@ export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) 
 
       {planner.reading && (
         <p className="hint d-flex align-items-center gap-1" role="status">
-          <Sparkle size={14} aria-hidden /> 읽는 중…
+          <Sparkle size={14} aria-hidden /> {t('읽는 중…', 'Reading…')}
         </p>
       )}
       {!planner.reading && echo && (
@@ -108,7 +122,7 @@ export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) 
       )}
       {!echo && !planner.reading && (
         <div className="prompt-examples">
-          {EXAMPLES.map((ex) => (
+          {EXAMPLES().map((ex) => (
             <button
               key={ex}
               type="button"

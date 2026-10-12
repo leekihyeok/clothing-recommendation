@@ -5,6 +5,7 @@ chosen by AI_PROVIDER in .env (only 'gemini' is implemented yet; the Claude adap
 Each call is logged to llm_calls so the cost of switching providers can be estimated from real token counts.
 """
 
+import re
 import threading
 import time
 from typing import Literal, TypeVar
@@ -43,6 +44,28 @@ QUOTA_DAY_TZ = "America/Los_Angeles"
 # separate and mostly unused), and give up within this many seconds.
 LIVE_DEADLINE_S = 20
 LIVE_FALLBACK = ["gemini-flash-latest", "gemini-3.7-flash", "gemini-3.5-flash"]
+# Those bigger models allow only ~20 calls a day each on the free tier (2026-10-12), so they are kept for people:
+# batch (paced) calls never use them, whatever tier they ask for.
+LIVE_RESERVE = set(LIVE_FALLBACK)
+
+# A 429 that says "Please retry in 16h28m…" is a used-up daily quota, not a per-minute burst: that model is skipped
+# until then instead of being asked again and again. Shorter waits are left to the normal back-off.
+COOLDOWN_MIN_S = 5 * 60
+_cooldown: dict[str, float] = {}  # model → time.monotonic() when it may be tried again
+_RETRY_IN = re.compile(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", re.I)
+
+
+def _retry_after_s(message: str | None) -> float:
+    m = _RETRY_IN.search(message or "")
+    if not m or not any(m.groups()):
+        return 0.0
+    h, mi, se = m.groups()
+    return int(h or 0) * 3600 + int(mi or 0) * 60 + float(se or 0)
+
+
+def _cooling(model: str) -> bool:
+    until = _cooldown.get(model)
+    return until is not None and time.monotonic() < until
 
 
 class AIError(RuntimeError):
@@ -109,15 +132,17 @@ def batch_used_today(conn, model: str) -> int:
 def _generate_gemini(purpose, prompt, schema, system, tier, conn, run_id, paced=True):
     from google.genai import errors, types
 
-    models = [m for m in GEMINI_MODELS[tier] if m not in _unavailable]
+    models = [m for m in GEMINI_MODELS[tier] if m not in _unavailable and not _cooling(m)]
+    if paced:
+        models = [m for m in models if m not in LIVE_RESERVE]
     if paced and conn is not None:
         models = [m for m in models if batch_used_today(conn, m) < settings.ai_batch_daily_cap]
         if not models:
             raise AIError(f"daily batch budget ({settings.ai_batch_daily_cap}/model) used for tier {tier!r}; the rest is kept for users until midnight Pacific")
     if not paced:
-        models += [m for m in LIVE_FALLBACK if m not in models and m not in _unavailable]
+        models += [m for m in LIVE_FALLBACK if m not in models and m not in _unavailable and not _cooling(m)]
     if not models:
-        raise AIError(f"no available Gemini model for tier {tier!r}")
+        raise AIError(f"no available Gemini model for tier {tier!r} (daily quota used up until midnight Pacific)")
     deadline = time.monotonic() + LIVE_DEADLINE_S
     config = types.GenerateContentConfig(
         system_instruction=system,
@@ -150,6 +175,13 @@ def _generate_gemini(purpose, prompt, schema, system, tier, conn, run_id, paced=
                 _unavailable.add(model)
                 models = [m for m in models if m != model]
                 continue
+            if e.code == 429 and _retry_after_s(e.message) >= COOLDOWN_MIN_S:
+                # This model's daily quota is gone: drop it for this call and for later ones until it resets.
+                _cooldown[model] = time.monotonic() + _retry_after_s(e.message)
+                models = [m for m in models if m != model]
+                if not models:
+                    raise AIError(f"every {tier!r} model's daily quota used up until midnight Pacific: {e.message!s:.160}") from e
+                continue
             if e.code in (429, 503) or (e.code or 0) >= 500:
                 model_idx += 1  # this model is overloaded or out of quota: try the next one, backing off per round
                 if model_idx % len(models) == 0:
@@ -169,6 +201,13 @@ def _generate_gemini(purpose, prompt, schema, system, tier, conn, run_id, paced=
 
 def _log(conn, run_id, purpose, model, usage, latency_ms, *, ok: bool, error: str | None = None, requested: str | None = None) -> None:
     if conn is None:
+        # A call from the app (a person waiting): logged on its own short connection, so the status can show how
+        # much of each model's daily quota people used. A logging failure never fails their request.
+        try:
+            with psycopg.connect(settings.database_url, connect_timeout=3) as own:
+                _log(own, run_id, purpose, model, usage, latency_ms, ok=ok, error=error, requested=requested)
+        except Exception:
+            pass
         return
     input_tokens = output_tokens = cached = None
     if usage is not None:

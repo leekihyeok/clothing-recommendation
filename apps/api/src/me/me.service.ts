@@ -166,10 +166,6 @@ export class MeService {
       taste,
     };
   }
-
-  async forget(userId: string): Promise<void> {
-    await this.db.pool.query('DELETE FROM users WHERE id = $1', [userId]); // events cascade, courses keep (user_id → null)
-  }
 }
 
 export type Personal = Awaited<ReturnType<MeService['personal']>>;

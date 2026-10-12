@@ -2,6 +2,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { Args, Context, Field, ID, InputType, Int, Mutation, ObjectType, Query, Resolver } from '@nestjs/graphql';
 import { AdminService } from '../admin/admin.service';
 import { MeService, type Request } from '../me/me.service';
+import { RateLimitService } from '../infra/rate-limit.service';
 import { OwnersService } from './owners.service';
 
 @ObjectType()
@@ -84,6 +85,9 @@ export class OwnerClaimInput {
 
   @Field({ nullable: true })
   message?: string;
+
+  @Field({ nullable: true, description: '사업자등록증 사진 (JPEG base64, 필수). 관리자만 보고 승인·거절하면 지운다' })
+  documentBase64?: string;
 }
 
 @ObjectType()
@@ -133,6 +137,9 @@ export class AdminClaim {
   @Field(() => ID)
   id: string;
 
+  @Field({ description: '사업자등록증 사진이 남아 있나 (승인·거절하면 지운다)' })
+  hasDocument: boolean;
+
   @Field()
   status: string;
 
@@ -176,6 +183,7 @@ export class OwnersResolver {
     private readonly owners: OwnersService,
     private readonly me: MeService,
     private readonly admin: AdminService,
+    private readonly limits: RateLimitService,
   ) {}
 
   @Mutation(() => OwnerClaimResult, { description: '이 가게 사장님이에요: 사업자등록번호로 신청 (관리자가 승인). 로그인 필요' })
@@ -184,7 +192,9 @@ export class OwnersResolver {
     @Args('input') input: OwnerClaimInput,
     @Context('req') req: Request,
   ): Promise<OwnerClaimResult> {
-    return this.owners.claim(await this.me.requireLogin(req), shopId, input);
+    const userId = await this.me.requireLogin(req);
+    await this.limits.hit('claim', req, userId);
+    return this.owners.claim(userId, shopId, input);
   }
 
   @Query(() => [MyClaim], { description: '내 사장님 신청' })
@@ -240,6 +250,12 @@ export class OwnersResolver {
     @Context('req') req: Request,
   ): Promise<boolean> {
     return this.owners.review(await this.requireAdmin(req), id, approve, note);
+  }
+
+  @Query(() => String, { nullable: true, description: '관리자: 신청의 사업자등록증 사진 (data URL). 처리한 신청은 없음' })
+  async ownerClaimDocument(@Args('id', { type: () => ID }) id: string, @Context('req') req: Request): Promise<string | null> {
+    await this.requireAdmin(req);
+    return this.owners.claimDocument(id);
   }
 
   private async requireAdmin(req: Request): Promise<string> {

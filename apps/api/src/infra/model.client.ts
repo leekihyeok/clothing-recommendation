@@ -1,9 +1,10 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /** HTTP client for services/model. The model service is internal-only; nothing else should call it. */
 @Injectable()
 export class ModelClient {
+  private readonly log = new Logger(ModelClient.name);
   private readonly baseUrl: string;
 
   constructor(config: ConfigService) {
@@ -30,7 +31,9 @@ export class ModelClient {
       throw new ServiceUnavailableException('AI가 지금 붐벼요. 잠시 뒤 다시 해 주세요. 지역과 칩으로 고르면 바로 짤 수 있어요');
     }
     if (!res.ok) {
-      throw new Error(`model service ${path} responded ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      // The body (tracebacks, prompts) goes to the log only, never into the error a user could see.
+      this.log.error(`model service ${path} responded ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      throw new Error(`model service ${path} responded ${res.status}`);
     }
     return (await res.json()) as T;
   }

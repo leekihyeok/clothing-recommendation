@@ -18,6 +18,7 @@ data/logs/
 
 # 사용자가 올린 사진 (프로필·가게 사진: 개인 데이터)
 data/uploads/
+data/private/
 
 # build caches, local tool settings
 *.tsbuildinfo

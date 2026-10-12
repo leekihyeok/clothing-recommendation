@@ -1,3 +1,4 @@
+import { inLang } from '../infra/translations';
 import { Args, Field, Float, ID, Int, ObjectType, Query, Resolver } from '@nestjs/graphql';
 import { DbService } from '../infra/db.service';
 
@@ -61,10 +62,11 @@ export class RegionsResolver {
               ST_AsGeoJSON(polygon)::json AS polygon
        FROM regions ORDER BY shop_count DESC`,
     );
+    const en = await inLang(this.db.pool, rows.flatMap((r) => [r.name, r.intro]));
     const regions: Region[] = rows.map((r) => ({
       id: String(r.id),
-      name: r.name,
-      intro: r.intro ?? undefined,
+      name: en.get(r.name) ?? r.name,
+      intro: r.intro ? (en.get(r.intro) ?? r.intro) : undefined,
       center: { lat: r.lat, lng: r.lng },
       // GeoJSON polygon: first ring is the outline, as [lng, lat] pairs.
       polygon: (r.polygon.coordinates[0] as [number, number][]).map(([lng, lat]) => ({ lat, lng })),

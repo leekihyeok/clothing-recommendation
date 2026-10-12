@@ -1,5 +1,6 @@
-import { useQuery } from '@apollo/client';
-import { ArrowLeft, ArrowRight, NavigationArrow } from '@phosphor-icons/react';
+import { useApolloClient, useQuery } from '@apollo/client';
+import { getLang, setLang, t, useLang } from './i18n';
+import { ArrowClockwise, ArrowLeft, ArrowRight, NavigationArrow } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSheet } from './layout/useSheet';
 import { Logo } from './brand/Logo';
@@ -7,7 +8,7 @@ import { HealthPanel } from './components/HealthPanel';
 import { User } from '@phosphor-icons/react';
 import { MyPage } from './me/MyPage';
 import { useProfile } from './me/useProfile';
-import { Avatar } from './shop/ShopDetail';
+import { Avatar, categoryLabel } from './shop/ShopDetail';
 import { takeLoginResult } from './me/useAccount';
 import { CourseForm } from './course/CourseForm';
 import { CourseResult } from './course/CourseResult';
@@ -17,6 +18,9 @@ import { PlanProgress } from './course/PlanProgress';
 import { PresetRow } from './course/PresetRow';
 import { type Echo, PromptBox } from './course/PromptBox';
 import { type PlannedCourse, usePlanner } from './course/usePlanner';
+import { WalkMode, type WalkState } from './course/WalkMode';
+import { useNewNewsCount } from './shop/ShopNews';
+import { GROUP_PARAM, GroupJoin } from './course/Group';
 import { graphql } from './gql';
 import { SHOP_CATEGORIES } from './map/categories';
 import { RegionBar } from './map/RegionBar';
@@ -40,6 +44,9 @@ const RegionsDoc = graphql(`
 `);
 
 export function App() {
+  // Everything below re-renders when the language changes (no memoised children); data is asked for again in it.
+  const lang = useLang();
+  const apollo = useApolloClient();
   const [categories, setCategories] = useState<string[]>(ALL);
   // The shop detail on screen (?shop=<id> in the address, so it can be linked and survives a reload).
   const [detailId, setDetailId] = useState<string | null>(() => new URLSearchParams(window.location.search).get(SHOP_PARAM));
@@ -57,22 +64,43 @@ export function App() {
   // Back from Kakao login (?login=…): open "내 가게", where the login started, with a line about how it went.
   const [loginNotice] = useState(takeLoginResult);
   const [showMine, setShowMine] = useState(loginNotice !== null);
-  const [pickMode, setPickMode] = useState(false);
+  // "지도에서 고르기": the next tap on the map sets the start or the finish.
+  const [pickMode, setPickMode] = useState<'start' | 'end' | null>(null);
+  // 걷기 모드 on the course on screen, and what the map shows meanwhile (my position, the next place).
+  const [walking, setWalking] = useState(false);
+  const [walkState, setWalkState] = useState<WalkState | null>(null);
   const [echo, setEcho] = useState<Echo | null>(null);
   const [picked, setPicked] = useState<{ lat: number; lng: number } | null>(null);
   const [focusShop, setFocusShop] = useState<{ lat: number; lng: number } | null>(null);
+  // Where the open shop page's shop is (the map marks it).
+  const [shopPin, setShopPin] = useState<{ lat: number; lng: number; name: string } | null>(null);
+  // The page was opened on a shop or a group link: the map shows that, not "where I am".
+  const [linkedPlace] = useState(() => {
+    const p = new URLSearchParams(window.location.search);
+    return p.has(SHOP_PARAM) || p.has(GROUP_PARAM);
+  });
   const profile = useProfile().data?.myProfile ?? null;
+  // Saved shops posted something since the last look: a dot on 마이페이지.
+  const unreadNews = useNewNewsCount(!profile);
   const loadCourse = useLoadCourse();
   const [openNote, setOpenNote] = useState<string | null>(null);
+  // A course is being opened from the address (a share link, back / forward): the address is left alone meanwhile, so
+  // it isn't cleared (or set back to the old course) before the course arrives.
+  // The ref is set at once (the effect below can run in the same commit as the call); the state re-runs that effect.
+  const [linkLoading, setLinkLoading] = useState(false);
+  const linkPending = useRef(false);
   // The course in the address (?c=<id>) when the page loaded: a share link, or this user's own course after a reload.
   const [initialLink] = useState(() => new URLSearchParams(window.location.search).get(SHARE_PARAM));
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
+  // Opened from a "같이 가기" link (?g=<id>): the join screen, until a course for the group is open.
+  const [joinGroup, setJoinGroup] = useState<string | null>(() => new URLSearchParams(window.location.search).get(GROUP_PARAM));
   const body = useRef<HTMLDivElement>(null);
   const regions = useQuery(RegionsDoc).data?.regions ?? NO_REGIONS;
   const region = regions.find((r) => r.id === regionId) ?? null;
 
   const planner = usePlanner((c) => {
     editor.reset();
+    setWalking(false);
     sheet.setSnap('half'); // phones: the route on the map above, the list below
     setVariantIndex(0);
     setCourse(c);
@@ -87,13 +115,19 @@ export function App() {
   /** A saved course (share link, "최근 코스") back on screen, with its conditions in the form. */
   async function openCourse(id: string) {
     setOpenNote(null);
-    const c = await loadCourse(id);
+    linkPending.current = true;
+    setLinkLoading(true);
+    const c = await loadCourse(id).finally(() => {
+      linkPending.current = false;
+      setLinkLoading(false);
+    });
     if (!c) {
-      setOpenNote('코스를 찾지 못했어요. 링크가 맞는지 확인해 주세요');
+      setOpenNote(t('코스를 찾지 못했어요. 링크가 맞는지 확인해 주세요', "We couldn't find that course. Please check the link"));
       return;
     }
     planner.adopt(c);
     editor.reset();
+    setWalking(false);
     setEcho(null);
     setShowMine(false);
     setRegionId(c.request.regionId ?? null);
@@ -101,6 +135,12 @@ export function App() {
     setCourse(c);
     sheet.setSnap('half');
     body.current?.scrollTo({ top: 0 });
+  }
+
+  /** The course on screen again from the server (the language changed): what the user was doing stays as it was. */
+  async function reloadCourse(id: string) {
+    const c = await loadCourse(id);
+    if (c) setCourse((now) => (now?.id === id ? c : now));
   }
 
   const opened = useRef(false);
@@ -118,15 +158,16 @@ export function App() {
     const url = new URL(window.location.href);
     const was = { c: url.searchParams.get(SHARE_PARAM), shop: url.searchParams.get(SHOP_PARAM) };
     if (was.c === courseId && was.shop === detailId) return;
+    if (linkPending.current || (initialLink && !opened.current)) return; // the course in the address is on its way
     if (!courseId && openNote) return; // a link that didn't open stays visible while the note explains
     for (const [k, v] of [[SHARE_PARAM, courseId], [SHOP_PARAM, detailId]] as const) {
       if (v) url.searchParams.set(k, v);
       else url.searchParams.delete(k);
     }
-    const opened = (!was.c && courseId) || (!was.shop && detailId);
-    if (opened) window.history.pushState(null, '', url);
+    const isNew = (!was.c && courseId) || (!was.shop && detailId);
+    if (isNew) window.history.pushState(null, '', url);
     else window.history.replaceState(null, '', url);
-  }, [courseId, detailId, openNote]);
+  }, [courseId, detailId, openNote, linkLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Browser back / forward: follow the address.
   const courseRef = useRef(course);
@@ -156,6 +197,36 @@ export function App() {
     if (detailId) sheet.setSnap('full');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const view = detailId ? `shop:${detailId}` : showMine ? 'mine' : joinGroup && !course ? 'group' : course && walking ? 'walk' : course ? `course:${course.id}` : 'form';
+  const firstView = useRef(true);
+  useEffect(() => {
+    if (firstView.current) {
+      firstView.current = false;
+      return;
+    }
+    // After the new view has rendered (and the sheet moved).
+    const id = window.setTimeout(() => {
+      const target = body.current?.querySelector<HTMLElement>('h2, [data-autofocus]');
+      if (!target) return;
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+    }, 60);
+    return () => window.clearTimeout(id);
+  }, [view.replace(/^course:.*/, 'course')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Esc leaves "지도에서 고르기".
+  useEffect(() => {
+    if (!pickMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPickMode(null);
+        sheet.setSnap('half');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pickMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const itemLabels = useMemo(
     () => Object.fromEntries((planner.catalog?.items ?? []).map((s) => [s.id, s.label])),
     [planner.catalog],
@@ -164,7 +235,7 @@ export function App() {
   const mapCourse = useMemo<MapCourse | null>(() => {
     if (!course) return null;
     const v = course.variants[variantIndex] ?? course.variants[0];
-    return { origin: course.origin, startName: course.startName, stops: v.stops, breaks: v.breaks };
+    return { origin: course.origin, startName: course.startName, stops: v.stops, breaks: v.breaks, end: course.end, endName: course.endName, endLeg: v.endLeg };
   }, [course, variantIndex]);
 
   function toggleCategory(id: string) {
@@ -177,7 +248,7 @@ export function App() {
   function planHere() {
     setEcho(null); // planned from the buttons, not from text
     if (region) planner.run({ regionId: region.id });
-    else if (picked) planner.run({ point: picked, label: '고른 위치' });
+    else if (picked) planner.run({ point: picked, label: t('고른 위치', 'Picked spot') });
     else if (mapCenter) planner.run({ point: mapCenter, bounds: mapBounds ?? undefined });
   }
 
@@ -188,23 +259,55 @@ export function App() {
         regions={regions}
         focusRegionId={regionId}
         focusShop={focusShop}
+        shopPin={detailId ? shopPin : null}
         pickMode={pickMode}
+        onStopClick={(order) => {
+          if (!course || walking) return;
+          setDetailId(null);
+          setShowMine(false);
+          setHoverOrder(order);
+          sheet.setSnap('half');
+          // After the list is back on screen: that card in the middle of it, focused.
+          window.setTimeout(() => {
+            const list = body.current;
+            const card = list?.querySelector<HTMLElement>(`[data-stop-order="${order}"]`);
+            if (!list || !card) return;
+            const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            // Only the list scrolls (scrollIntoView also moved the page around the fixed layout on phones).
+            const listTop = list.getBoundingClientRect().top;
+            const top = card.getBoundingClientRect().top - listTop + list.scrollTop;
+            // The part of the list on screen: on phones the half sheet shows only its top, above the footer.
+            const footTop = footRef.current && !footRef.current.hidden ? footRef.current.getBoundingClientRect().top : window.innerHeight;
+            const shown = Math.max(card.offsetHeight, Math.min(list.clientHeight, footTop - listTop, window.innerHeight - listTop));
+            list.scrollTo({ top: Math.max(0, top - Math.max(8, (shown - card.offsetHeight) / 2)), behavior: still ? 'auto' : 'smooth' });
+            card.focus({ preventScroll: true });
+          }, 80);
+        }}
+        onCancelPick={() => {
+          setPickMode(null);
+          sheet.setSnap('half');
+        }}
         pickedPoint={picked}
+        pickedEnd={planner.end.kind === 'point' ? planner.end.point : null}
+        walk={walking ? walkState : null}
         onPickPoint={(p) => {
-          setPicked(p);
-          setPickMode(false);
-          setRegionId(null);
+          if (pickMode === 'end') planner.setEnd({ kind: 'point', point: p, name: t('고른 곳', 'Picked spot') });
+          else {
+            setPicked(p);
+            setRegionId(null);
+          }
+          setPickMode(null);
           sheet.setSnap('half');
         }}
         course={mapCourse}
-        hoverOrder={hoverOrder}
+        hoverOrder={hoverOrder ?? (walking ? walkState?.next?.order ?? null : null)}
         onSelect={(s) => {
           if (s) openShop(s.id);
         }}
         onViewport={setViewport}
         onCenter={setMapCenter}
         onBounds={setMapBounds}
-        locateOnStart={!initialLink}
+        locateOnStart={!initialLink && !linkedPlace}
       />
 
       <main
@@ -212,13 +315,13 @@ export function App() {
         className={`panel${sheet.dragging ? ' is-dragging' : ''}`}
         data-snap={sheet.snap}
         style={sheet.style}
-        aria-label="코스 만들기"
+        aria-label={t('코스 만들기', 'Plan a course')}
         {...sheet.handlers}
       >
         <button
           type="button"
           className="sheet-handle"
-          aria-label={sheet.snap === 'peek' ? '패널 펼치기' : '패널 접어서 지도 크게 보기'}
+          aria-label={sheet.snap === 'peek' ? t('패널 펼치기', 'Expand panel') : t('패널 접어서 지도 크게 보기', 'Collapse panel to see more map')}
           aria-expanded={sheet.snap !== 'peek'}
           onKeyDown={(e) => {
             // Taps are handled by the drag code (pointer up without movement); the keyboard gets its own keys.
@@ -231,8 +334,30 @@ export function App() {
           }}
         />
         <header className="panel-head" ref={headRef}>
-          <h1 className="visually-hidden">ROUTE 01 — 취향대로 걷는 서울 옷가게 코스</h1>
+          <h1 className="visually-hidden">{t('ROUTE 01 — 취향대로 걷는 서울 옷가게 코스', 'ROUTE 01 — Seoul clothing-shop walks, made to your taste')}</h1>
           <Logo />
+          {/* Quiet text switch, editorial style: both languages visible, the current one in ink with the signal
+              underline (as active tabs), the other grey. Subordinate to 마이페이지, the header's one button. */}
+          <div className="lang-switch" role="group" aria-label="언어 · Language">
+            {(['ko', 'en'] as const).map((l) => (
+              <button
+                key={l}
+                type="button"
+                lang={l}
+                aria-pressed={lang === l}
+                aria-label={l === 'ko' ? '한국어' : 'English'}
+                onClick={async () => {
+                  if (lang === l) return;
+                  setLang(l);
+                  await apollo.refetchQueries({ include: 'active' });
+                  // Its notes and reasons in the new language; the tab, 걷기 모드 and undo stay as they were.
+                  if (course) reloadCourse(course.id);
+                }}
+              >
+                {l.toUpperCase()}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="mine-btn"
@@ -243,7 +368,8 @@ export function App() {
             }}
           >
             {profile ? <Avatar name={profile.nickname} url={profile.avatarUrl} size={22} /> : <User size={18} aria-hidden />}
-            <span>마이페이지</span>
+            <span>{t('마이페이지', 'My page')}</span>
+            {unreadNews > 0 && !showMine && <span className="mine-dot" aria-label={t(`찜한 가게 새 소식 ${unreadNews}개`, `${unreadNews} new from saved shops`)} />}
           </button>
         </header>
 
@@ -253,6 +379,8 @@ export function App() {
             <ShopDetail
               key={detailId}
               shopId={detailId}
+              onPlace={setShopPin}
+              onOpenShop={openShop}
               styleLabels={styleLabels}
               itemLabels={itemLabels}
               onBack={() => {
@@ -277,6 +405,14 @@ export function App() {
           ) : showMine ? (
             <MyPage
               styleLabels={styleLabels}
+              busy={planner.busy}
+              onPlanSaved={(g) => {
+                setEcho(null);
+                setPicked(null);
+                setShowMine(false);
+                setRegionId(g.regionId ?? null);
+                planner.runSaved(g);
+              }}
               notice={loginNotice}
               onOpenCourse={openCourse}
               onClose={() => setShowMine(false)}
@@ -284,6 +420,51 @@ export function App() {
                 if (at) setFocusShop(at);
                 openShop(id);
               }}
+            />
+          ) : joinGroup && !course ? (
+            <GroupJoin
+              groupId={joinGroup}
+              styles={planner.catalog?.styles ?? []}
+              styleLabels={styleLabels}
+              onPlace={({ regionId: rid, at }) => {
+                if (rid) setRegionId(rid);
+                else if (at) setFocusShop(at);
+              }}
+              onJoined={(id) => {
+                setJoinGroup(null);
+                const url = new URL(window.location.href);
+                url.searchParams.delete(GROUP_PARAM);
+                window.history.replaceState(null, '', url);
+                openCourse(id);
+              }}
+              onClose={() => {
+                setJoinGroup(null);
+                const url = new URL(window.location.href);
+                url.searchParams.delete(GROUP_PARAM);
+                window.history.replaceState(null, '', url);
+              }}
+            />
+          ) : course && walking ? (
+            <WalkMode
+              // Not keyed by the course id: an edit that copies a shared course must not restart the walk.
+              key={`walk:${variantIndex}`}
+              course={course}
+              variant={course.variants[variantIndex] ?? course.variants[0]}
+              title={
+                getLang() === 'en'
+                  ? `${course.request.styles.length ? course.request.styles.map((s) => styleLabels[s] ?? s).join(' · ') : 'Shop walk'} in ${
+                      course.request.regionName ?? course.startName ?? 'Seoul'
+                    }`
+                  : `${course.request.regionName ?? course.startName ?? '서울'}에서 ${
+                      course.request.styles.length ? course.request.styles.map((s) => styleLabels[s] ?? s).join(' · ') : '옷가게 산책'
+                    }`
+              }
+              onExit={() => {
+                setWalking(false);
+                sheet.setSnap('half');
+              }}
+              onOpenShop={openShop}
+              onState={setWalkState}
             />
           ) : course ? (
             <CourseResult
@@ -293,9 +474,9 @@ export function App() {
               activeOrder={hoverOrder}
               onVariant={setVariantIndex}
               onHoverStop={setHoverOrder}
-              onFitAll={() => planner.rerunWithoutTimeLimit()}
-              onGender={(g) => planner.changeGender(g, (course.variants[variantIndex] ?? course.variants[0]).stops.map((s) => s.shop.id))}
-              onAnother={() => planner.again((course.variants[variantIndex] ?? course.variants[0]).stops.map((s) => s.shop.id))}
+              onFitAll={() => planner.rerunWithoutTimeLimit(course.request.mustShops)}
+              onGender={(g) => planner.changeGender(g, (course.variants[variantIndex] ?? course.variants[0]).stops.map((s) => s.shop.id), course.request.mustShops)}
+              onAnother={() => planner.again((course.variants[variantIndex] ?? course.variants[0]).stops.map((s) => s.shop.id), course.request.mustShops)}
               onOpenShop={openShop}
               onCourseId={(id) => setCourse((c) => (c ? { ...c, id, shared: false } : c))}
               regions={regions}
@@ -304,11 +485,18 @@ export function App() {
                 const from = course.id;
                 setEcho(null);
                 setRegionId(id);
-                planner.run({ regionId: id }, undefined, 'buttons', { continueFrom: from });
+                // Pins belong to this area; the next one starts without them.
+                planner.run({ regionId: id }, { ...planner.form(), mustShops: [] }, 'buttons', { continueFrom: from });
               }}
               echo={echo}
               busy={planner.busy}
               editor={editor}
+              onWeather={(on) => planner.setWeatherAndRerun(on, course.request.mustShops)}
+              onWalk={() => {
+                setWalking(true);
+                sheet.setSnap('half');
+                body.current?.scrollTo({ top: 0 });
+              }}
             />
           ) : (
             <>
@@ -318,7 +506,7 @@ export function App() {
                 onEcho={setEcho}
                 // Text without a place: where the map is (and only what it shows).
                 fallbackOrigin={() =>
-                  region ? { regionId: region.id } : picked ? { point: picked, label: '고른 위치' } : mapCenter ? { point: mapCenter, bounds: mapBounds ?? undefined } : null
+                  region ? { regionId: region.id } : picked ? { point: picked, label: t('고른 위치', 'Picked spot') } : mapCenter ? { point: mapCenter, bounds: mapBounds ?? undefined } : null
                 }
               />
               <PresetRow
@@ -337,20 +525,28 @@ export function App() {
                   setRegionId(id);
                   if (id) setPicked(null);
                 }}
-                picking={pickMode}
+                picking={pickMode === 'start'}
                 picked={!!picked}
                 onPick={() => {
-                  setPickMode(true);
+                  setPickMode('start');
                   sheet.setSnap('peek'); // phones: get the sheet out of the way so the map can be tapped
                 }}
                 onClearPick={() => setPicked(null)}
               />
-              <CourseForm planner={planner} near={picked ?? mapCenter} />
+              <CourseForm
+                planner={planner}
+                near={picked ?? mapCenter}
+                pickingEnd={pickMode === 'end'}
+                onPickEnd={() => {
+                  setPickMode(pickMode === 'end' ? null : 'end');
+                  if (pickMode !== 'end') sheet.setSnap('peek');
+                }}
+              />
 
               <details className="dev-details">
-                <summary>지도에 보이는 가게 종류</summary>
+                <summary>{t('지도에 보이는 가게 종류', 'Shop types on the map')}</summary>
                 <div className="pt-3">
-                  <div className="chip-row" role="group" aria-label="가게 종류">
+                  <div className="chip-row" role="group" aria-label={t('가게 종류', 'Shop types')}>
                     {SHOP_CATEGORIES.map((c) => {
                       const on = categories.includes(c.id);
                       return (
@@ -362,22 +558,25 @@ export function App() {
                           onClick={() => toggleCategory(c.id)}
                         >
                           <span className="chip-dot" style={{ background: c.color }} />
-                          {c.label}
+                          {categoryLabel(c.id) ?? c.label}
                         </button>
                       );
                     })}
                   </div>
                   <p className="hint tabular">
                     {!viewport
-                      ? '지도를 불러오는 중…'
+                      ? t('지도를 불러오는 중…', 'Loading the map…')
                       : viewport.shown < viewport.total
-                        ? `이 화면 ${viewport.total.toLocaleString()}곳 중 눈에 띄는 ${viewport.shown.toLocaleString()}곳 표시 · 확대하면 더 보여요`
-                        : `이 화면에 ${viewport.total.toLocaleString()}곳`}
+                        ? t(
+                            `이 화면 ${viewport.total.toLocaleString()}곳 중 눈에 띄는 ${viewport.shown.toLocaleString()}곳 표시 · 확대하면 더 보여요`,
+                            `Showing ${viewport.shown.toLocaleString()} of ${viewport.total.toLocaleString()} shops here · zoom in to see more`,
+                          )
+                        : t(`이 화면에 ${viewport.total.toLocaleString()}곳`, `${viewport.total.toLocaleString()} shops here`)}
                   </p>
                 </div>
               </details>
               <details className="dev-details">
-                <summary>개발 정보</summary>
+                <summary>{t('개발 정보', 'Developer info')}</summary>
                 <div className="pt-3">
                   <HealthPanel />
                 </div>
@@ -387,28 +586,52 @@ export function App() {
         </div>
 
         {/* The shop detail has its own actions; the plan button would only compete with them. */}
-        <footer className="panel-foot" ref={footRef} hidden={!!detailId}>
+        <footer className="panel-foot" ref={footRef} hidden={!!detailId || (walking && !!course) || (!!joinGroup && !course)}>
           {openNote && !course && (
             <p className="small mb-2" role="alert" style={{ color: 'var(--danger)' }}>
               {openNote}
             </p>
           )}
           {planner.error && (
-            <p className="small mb-2" role="alert" style={{ color: 'var(--danger)' }}>
-              {planner.error}
+            <div className="plan-error mb-2" role="alert">
+              <span>{planner.error}</span>
+              {planner.canRetry && (
+                <button type="button" className="btn-text" disabled={planner.busy} onClick={() => planner.retry()}>
+                  <ArrowClockwise size={14} aria-hidden /> {t('다시 시도', 'Try again')}
+                </button>
+              )}
+            </div>
+          )}
+          {planner.notice && !planner.error && (
+            <p className="hint small mb-2" role="status">
+              {planner.notice}
             </p>
           )}
           {course ? (
-            <button type="button" className="btn-ink" onClick={() => setCourse(null)}>
+            <button
+              type="button"
+              className="btn-ink"
+              onClick={() => {
+                // The form shows the course's pins as they are now (pinned or unpinned on its cards).
+                planner.setPins(course.request.mustShops);
+                setCourse(null);
+              }}
+            >
               <span className="d-inline-flex align-items-center gap-2">
-                <ArrowLeft size={18} aria-hidden /> 조건 바꿔서 다시 짜기
+                <ArrowLeft size={18} aria-hidden /> {t('조건 바꿔서 다시 짜기', 'Change options and replan')}
               </span>
             </button>
           ) : (
             <>
               <button type="button" className="btn-ink" disabled={planner.busy || (!region && !mapCenter)} onClick={planHere}>
                 <span>
-                  {planner.loading ? '코스 짜는 중…' : region ? `${region.name}에서 코스 짜기` : picked ? '고른 위치에서 코스 짜기' : '지도 가운데서 코스 짜기'}
+                  {planner.loading
+                    ? t('코스 짜는 중…', 'Planning your course…')
+                    : region
+                      ? t(`${region.name}에서 코스 짜기`, `Plan a course in ${region.name}`)
+                      : picked
+                        ? t('고른 위치에서 코스 짜기', 'Plan from the picked spot')
+                        : t('지도 가운데서 코스 짜기', 'Plan from the map center')}
                 </span>
                 <ArrowRight size={20} aria-hidden />
               </button>
@@ -422,7 +645,7 @@ export function App() {
                 }}
               >
                 <NavigationArrow size={16} aria-hidden />
-                {planner.locating ? '위치 확인 중…' : '지금 내 위치에서 바로'}
+                {planner.locating ? t('위치 확인 중…', 'Finding you…') : t('지금 내 위치에서 바로', 'Start from where I am')}
               </button>
             </>
           )}

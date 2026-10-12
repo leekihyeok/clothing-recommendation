@@ -809,7 +809,11 @@ details.more > summary {
   top: 1rem;
   left: 50%;
   translate: -50% 0;
-  padding: 0.625rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: calc(100% - 2rem);
+  padding: 0.25rem 0.25rem 0.25rem 1rem;
   background: var(--ink);
   color: #fff;
   font-size: 0.875rem;
@@ -2260,4 +2264,579 @@ details.more > summary {
   }
   &:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
   &:disabled { opacity: 0.5; cursor: default; }
+}
+
+// ---------- when / finish (start time, finish time, end point) ----------
+// 언제: two rows of three — 지금 출발 · 오늘 · 내일 / 이번 토 · 이번 일 · 다른 날.
+.when-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  .chip { width: 100%; justify-content: center; }
+  .chip:disabled { color: var(--ink-3); border-style: dotted; cursor: not-allowed; }
+}
+// "다른 날" calendar: opens as a full-width row under the day buttons.
+.day-cal {
+  grid-column: 1 / -1;
+  padding: 0.75rem;
+  border: 1px solid var(--ink);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(12, 10, 9, 0.12);
+  animation: day-cal-in 150ms var(--ease);
+}
+@keyframes day-cal-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.day-cal-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  strong { font-size: 0.9375rem; }
+  span { flex: 1; font-size: 0.75rem; color: var(--ink-3); }
+  .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 0; background: none; cursor: pointer; }
+}
+.day-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.day-cal-dow {
+  padding: 0.25rem 0;
+  text-align: center;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  &.is-weekend { color: var(--ink); }
+}
+.day-cal-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease);
+  small { position: absolute; top: 2px; font-size: 0.5625rem; font-weight: 600; color: var(--ink-3); }
+  &:hover:not(:disabled) { border-color: var(--ink); }
+  &:disabled { color: var(--line-strong); font-weight: 400; cursor: default; }
+  // Today: a small signal mark under the number.
+  &.is-today::after { content: ''; position: absolute; bottom: 5px; width: 4px; height: 4px; background: var(--signal); }
+  &.is-selected { background: var(--ink); border-color: var(--ink); color: #fff; small { color: rgba(255, 255, 255, 0.7); } }
+  &:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+}
+.chip-removable {
+  padding-right: 0;
+  button { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 38px; border: 0; background: none; color: inherit; cursor: pointer; }
+}
+.time-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  label { font-size: 0.8125rem; font-weight: 600; color: var(--ink-2); min-width: 4.5rem; }
+}
+.field-select {
+  min-height: 40px;
+  padding: 0 2rem 0 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 256 256'%3E%3Cpath fill='%230c0a09' d='M213.66 101.66l-80 80a8 8 0 0 1-11.32 0l-80-80a8 8 0 0 1 11.32-11.32L128 164.69l74.34-74.35a8 8 0 0 1 11.32 11.32Z'/%3E%3C/svg%3E") no-repeat right 0.75rem center;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+  appearance: none;
+  cursor: pointer;
+  &:hover { border-color: var(--ink); }
+}
+.course-schedule {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.leg-arrive { margin-left: auto; font-weight: 600; color: var(--ink); }
+.tag.is-warning { display: inline-flex; align-items: center; gap: 3px; border-color: var(--danger); color: var(--danger); }
+.hours-src { font-weight: 500; color: var(--ink-3); }
+.end-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--ink);
+  background: var(--surface);
+  font-size: 0.875rem;
+}
+.course-start.is-finish { background: var(--surface); color: var(--ink); border: 2px solid var(--ink); }
+.pick-pin.is-end { background: var(--ink); &::after { border-top-color: var(--ink); } }
+
+// ---------- walk mode ----------
+.walk-start {
+  margin-top: 1rem;
+  .walk-start-sub { font-size: 0.8125rem; font-weight: 500; opacity: 0.75; }
+}
+.walk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  .btn-text { min-height: 44px; }
+}
+.walk-progress {
+  display: flex;
+  gap: 3px;
+  margin: 0.5rem 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  li { flex: 1; height: 4px; background: var(--line); }
+  li.is-done { background: var(--ink); }
+  li.is-skipped { background: var(--line-strong); }
+  li.is-next { background: var(--signal); }
+}
+.walk-next, .walk-done {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--ink);
+}
+.walk-label {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.walk-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  .shop-link { font-size: inherit; font-weight: inherit; text-align: left; }
+}
+.walk-dist {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.walk-next.is-close .walk-dist { color: var(--signal); }
+.walk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  .is-warning { color: var(--danger); font-weight: 600; }
+}
+.walk-next .btn-pair { grid-template-columns: 1fr 1fr; }
+.walk-next .btn-pair .btn-line, .walk-done .btn-pair .btn-line { justify-content: center; gap: 0.375rem; text-decoration: none; }
+.walk-done .btn-pair { grid-template-columns: 1fr 1fr; }
+.walk-rate {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--ink);
+  background: var(--surface);
+  p { display: flex; align-items: center; gap: 0.375rem; margin: 0 0 0.75rem; font-size: 0.9375rem; }
+  .btn-text { margin-top: 0.5rem; min-height: 40px; }
+}
+.walk-rate-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.walk-list {
+  margin: 1.5rem 0 0.5rem;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  li {
+    display: grid;
+    grid-template-columns: 2rem 1fr auto auto;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 44px;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.875rem;
+  }
+  li.is-next { font-weight: 700; }
+  li.is-skipped .walk-list-name { color: var(--ink-3); text-decoration: line-through; }
+  .walk-list-mark { display: inline-flex; justify-content: center; font-family: var(--serif); font-size: 1.125rem; }
+  .walk-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .walk-list-state { font-size: 0.75rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .btn-text { min-height: 40px; font-size: 0.75rem; }
+}
+// My live position while walking pulses gently (no pulse with reduced motion — the global rule stops it).
+.me-dot.is-live { animation: me-pulse 2s var(--ease) infinite; }
+@keyframes me-pulse {
+  0%, 100% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.18), 0 1px 4px rgba(12, 10, 9, 0.3); }
+  50% { box-shadow: 0 0 0 12px rgba(37, 99, 235, 0.08), 0 1px 4px rgba(12, 10, 9, 0.3); }
+}
+.course-stop.is-next .course-marker { background: var(--signal); transform: scale(1.15); }
+.course-stop.is-next .course-label { background: var(--ink); color: #fff; }
+
+// ---------- 찜한 가게로 코스 짜기 (마이페이지) ----------
+.saved-plan {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--ink);
+  background: var(--surface);
+  h3 { margin: 0 0 0.25rem; font-size: 1rem; font-weight: 700; letter-spacing: -0.02em; }
+  ul { margin: 0.75rem 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+}
+.saved-plan-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 52px;
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms var(--ease), background-color 150ms var(--ease);
+  &:hover { border-color: var(--ink); }
+  &:disabled { opacity: 0.5; cursor: progress; }
+  .saved-plan-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  strong { font-size: 0.9375rem; }
+  .saved-plan-text span { font-size: 0.75rem; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+// ---------- walk recap card ----------
+.recap {
+  margin: 0.5rem 0 0;
+  img { display: block; width: 100%; max-width: 280px; margin: 0 auto 0.75rem; border: 1px solid var(--line-strong); box-shadow: 0 8px 24px rgba(12, 10, 9, 0.12); }
+  .btn-pair { grid-template-columns: 1fr; }
+  .btn-line { justify-content: center; gap: 0.375rem; }
+}
+
+// ---------- 여기 좋았다면 (similar shops) ----------
+.similar-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  button {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    min-height: 56px;
+    padding: 0.5rem 0;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: none;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    &:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+  }
+  .similar-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  strong { font-size: 0.9375rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .similar-text span { font-size: 0.75rem; color: var(--ink-2); }
+  .similar-meta { font-size: 0.75rem; color: var(--ink-3); text-align: right; line-height: 1.4; }
+}
+
+// ---------- pinned shops (고정: kept when the course is planned again) ----------
+// The pin sits with ✓ and ♡; pinned = filled ink pin, an ink rule on the card's left and a "고정" tag (never colour alone).
+.course-card.is-pinned {
+  box-shadow: inset 3px 0 0 var(--ink);
+}
+.tag.is-pinned {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+.pin-note {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  &.is-on { color: var(--ink); font-weight: 600; }
+}
+// Pinned is ink, not the route's signal orange (that stays for the line and the active stop).
+.save-btn.pin-btn.is-on { color: var(--ink); }
+// A brand asked for in the conditions: outlined ink, next to the filled "고정" (kept every time too, by brand).
+.tag.is-brand { display: inline-flex; align-items: center; gap: 3px; border-color: var(--ink); color: var(--ink); }
+
+// ---------- weather on the course ----------
+.weather-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  &.is-bad { border-color: var(--ink); }
+  .weather-sum { display: flex; align-items: center; gap: 0.375rem; margin: 0; font-size: 0.8125rem; font-weight: 600; color: var(--ink); }
+  .weather-note { flex-basis: 100%; margin: 0; font-size: 0.8125rem; color: var(--ink-2); }
+  .btn-text { min-height: 36px; padding: 0; font-size: 0.8125rem; }
+}
+
+// ---------- 사장님 소식 ----------
+.tag.is-news { display: inline-flex; align-items: center; gap: 3px; border-color: var(--ink); color: var(--ink); background: var(--paper); }
+.news-list { display: flex; flex-direction: column; gap: 0.75rem; }
+.news-card {
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  h4 { margin: 0.5rem 0 0.25rem; font-size: 1rem; font-weight: 700; letter-spacing: -0.02em; }
+  p { margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--ink-2); white-space: pre-line; }
+  &.is-sale { border-left: 3px solid var(--ink); }
+}
+.news-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.news-shop { font-size: 0.875rem; font-weight: 700; }
+.news-date { margin-left: auto; font-size: 0.75rem; color: var(--ink-3); }
+.news-delete { margin-top: 0.5rem; min-height: 36px; font-size: 0.75rem; }
+.is-unread .news-card { border-color: var(--ink); }
+.tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 4px; padding: 0 4px; background: var(--ink); color: #fff; font-size: 0.6875rem; font-weight: 700; }
+.mine-btn { position: relative; }
+.mine-dot { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; background: var(--signal); border: 2px solid var(--surface); }
+
+// ---------- 같이 가기 ----------
+.group-names { margin: 0 0 0.5rem; font-size: 0.875rem; }
+.group-members {
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line); font-size: 0.875rem; }
+  strong { min-width: 3rem; }
+  span { color: var(--ink-2); font-size: 0.8125rem; }
+}
+.group-fresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--ink);
+  background: var(--surface);
+  font-size: 0.875rem;
+  .btn-ink { width: auto; gap: 0.375rem; }
+}
+.group-join, .group-box {
+  .field-input { width: 100%; min-height: 44px; margin-top: 0.25rem; padding: 0.5rem 0.75rem; border: 1px solid var(--line-strong); background: var(--surface); font-size: 1rem; }
+  .field-input:focus { outline: 2px solid var(--ink); outline-offset: 0; }
+}
+
+// ---------- language switch (KO / EN) ----------
+// Text only, like the eyebrow labels: 12px caps with tracking; the current language is ink with the signal underline.
+.lang-switch {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  button {
+    position: relative;
+    min-width: 32px;
+    min-height: 44px;
+    padding: 0 0.375rem;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    cursor: pointer;
+    transition: color 150ms var(--ease);
+    &:hover { color: var(--ink); }
+    &[aria-pressed='true'] { color: var(--ink); }
+    &[aria-pressed='true']::after {
+      content: '';
+      position: absolute;
+      left: 0.375rem;
+      right: calc(0.375rem - 0.12em);
+      bottom: 10px;
+      height: 2px;
+      background: var(--signal);
+    }
+    &:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  }
+  button + button::before {
+    content: '/';
+    position: absolute;
+    left: -3px;
+    color: var(--line-strong);
+    font-weight: 400;
+  }
+}
+.lang-switch + .mine-btn { margin-left: 0.25rem; }
+
+// ---------- one-line controls (Korean and English) ----------
+// Button labels never wrap: a control that breaks into two lines reads as broken. Labels are kept short instead.
+.chip, .action-btn, .mine-btn, .card-menu-list button, .card-menu-list a, .tabs [role='tab'], .my-tabs [role='tab'] { white-space: nowrap; }
+// Header in two rows: wordmark · language · 마이페이지 on top, the tagline under them across the whole width, so it's
+// never cut (the controls used to squeeze it into the wordmark's width). The Logo's own box steps aside (contents).
+.panel-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.375rem;
+  .logo { display: contents; }
+  .wordmark { grid-column: 1; grid-row: 1; justify-self: start; }
+  .logo-tagline { grid-column: 1 / -1; grid-row: 2; white-space: nowrap; }
+  .lang-switch { grid-column: 2; grid-row: 1; margin-left: 0; }
+  .mine-btn { grid-column: 3; grid-row: 1; flex: none; }
+}
+@media (max-width: 420px) {
+  .panel-head .mine-btn { padding: 0 0.625rem; }
+}
+
+// ---------- 사장님 신청: 사업자등록증 ----------
+.doc-pick {
+  display: block;
+  margin-top: 0.25rem;
+  border: 1px dashed var(--line-strong);
+  background: var(--surface);
+  cursor: pointer;
+  &:hover { border-color: var(--ink); }
+  &.has-doc { border-style: solid; }
+  img { display: block; width: 100%; max-height: 320px; object-fit: contain; background: var(--paper); }
+  .doc-pick-empty { display: flex; align-items: center; justify-content: center; gap: 0.5rem; min-height: 96px; font-size: 0.875rem; color: var(--ink-2); }
+}
+.doc-pick:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
+.claim-doc img { display: block; max-width: 320px; max-height: 420px; margin-top: 0.5rem; border: 1px solid var(--line-strong); }
+
+// "지도에서 고르기"의 취소: 배너 안의 글자 버튼 (터치 44px)
+.pick-cancel {
+  min-height: 44px;
+  padding: 0 0.875rem;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  &:hover { background: rgba(255, 255, 255, 0.12); }
+  &:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+}
+
+// ---------- 다시 시도 (코스 짜기 실패) ----------
+.plan-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--danger);
+  .btn-text { min-height: 40px; color: var(--ink); }
+}
+
+// ---------- 걷기 후 코스 평가 ----------
+.course-rate {
+  .action-btn.is-on { border-color: var(--ink); background: var(--ink); color: #fff; }
+  .course-rate-note { margin-top: 0.75rem; }
+  .course-rate-row { display: flex; gap: 0.5rem; .form-control { min-height: 44px; } .btn-line { flex: 0 0 auto; } }
+  [role='status']:empty { display: none; }
+  [role='status'] { margin-top: 0.5rem; }
+}
+
+// 지도 번호: 누를 수 있는 것처럼
+.course-stop { cursor: pointer; }
+.course-stop:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.course-card:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+// ---------- 관리자: 데이터 건강 ----------
+.data-health-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.data-health-head .btn-text { min-height: 40px; }
+.keeper-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line-strong);
+  font-weight: 600;
+  &.is-ok svg { color: var(--ok, #2f7d4f); }
+  &.is-bad { border-color: var(--danger); color: var(--danger); }
+}
+.data-health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1.5rem 2rem;
+}
+.data-health-sub { margin: 0 0 0.5rem; font-size: 0.875rem; font-weight: 600; }
+// Wide tables scroll inside their box on a phone instead of pushing the page sideways.
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.run-list, .rating-notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8125rem;
+  li { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; padding: 0.375rem 0; border-bottom: 1px solid var(--line); }
+}
+.run-list li.is-failed { color: var(--danger); }
+.run-list li.is-running span:last-child { font-style: italic; }
+.run-error { flex-basis: 100%; color: var(--ink-2); overflow-wrap: anywhere; }
+.rating-notes li { flex-direction: column; }
+
+// 열어 둔 가게 (가게 링크, 비슷한 가게 …): 지도 위 이름표
+.open-shop-pin {
+  position: relative;
+  padding: 0.375rem 0.625rem;
+  background: var(--ink);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(12, 10, 9, 0.3);
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    translate: -50% 0;
+    border: 6px solid transparent;
+    border-bottom: 0;
+    border-top-color: var(--ink);
+  }
+}
+
+// 지도 확대·축소: 주변 가게·코스 표시와 같은 쌓음 안에 (가려지지 않게), 44px 버튼 두 개
+.map-zoom {
+  display: flex;
+  align-self: flex-end;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgba(12, 10, 9, 0.1);
+  button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    &:hover { background: var(--paper); }
+    &:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  }
+  button + button { border-left: 1px solid var(--line-strong); }
 }

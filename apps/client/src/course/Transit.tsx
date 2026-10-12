@@ -3,6 +3,7 @@ import { ArrowUpRight, Bus, NavigationArrow, PersonSimpleWalk, Train } from '@ph
 import { useState } from 'react';
 import { graphql } from '../gql';
 import type { TransitRouteQuery } from '../gql/graphql';
+import { t } from '../i18n';
 
 const TransitDoc = graphql(`
   query TransitRoute($from: LatLngInput!, $to: LatLngInput!, $fromName: String, $toName: String) {
@@ -16,7 +17,7 @@ const TransitDoc = graphql(`
 export type Route = TransitRouteQuery['transitRoute'];
 
 const ICON = { subway: Train, bus: Bus, walk: PersonSimpleWalk } as const;
-const MODE = { subway: '지하철', bus: '버스', walk: '도보' } as const;
+const MODE = () => ({ subway: t('지하철', 'Subway'), bus: t('버스', 'Bus'), walk: t('도보', 'Walk') });
 
 /** One public-transit route: totals, then each leg (line name in words, not colour only), then Kakao Map. */
 export function TransitCard({ route, title }: { route: Route; title?: string }) {
@@ -26,10 +27,10 @@ export function TransitCard({ route, title }: { route: Route; title?: string }) 
       {route.found ? (
         <>
           <p className="transit-sum tabular">
-            <strong>{route.minutes}분</strong>
-            {route.transfers > 0 ? ` · 환승 ${route.transfers}번` : ' · 환승 없음'}
-            {route.fare ? ` · ${route.fare.toLocaleString()}원` : ''}
-            {route.walkM ? ` · 걷기 ${route.walkM.toLocaleString()}m` : ''}
+            <strong>{route.minutes}{t('분', ' min')}</strong>
+            {route.transfers > 0 ? t(` · 환승 ${route.transfers}번`, ` · ${route.transfers} ${route.transfers === 1 ? 'transfer' : 'transfers'}`) : t(' · 환승 없음', ' · no transfers')}
+            {route.fare ? t(` · ${route.fare.toLocaleString()}원`, ` · ₩${route.fare.toLocaleString()}`) : ''}
+            {route.walkM ? t(` · 걷기 ${route.walkM.toLocaleString()}m`, ` · ${route.walkM.toLocaleString()}m on foot`) : ''}
           </p>
           <ol className="transit-steps">
             {route.steps.map((s, i) => {
@@ -39,11 +40,11 @@ export function TransitCard({ route, title }: { route: Route; title?: string }) 
                 <li key={i}>
                   <Icon size={16} aria-hidden />
                   <span>
-                    <strong>{mode === 'walk' ? '걷기' : s.line || MODE[mode]}</strong>
+                    <strong>{mode === 'walk' ? t('걷기', 'Walk') : s.line || MODE()[mode]}</strong>
                     {mode !== 'walk' && s.from && s.to && ` ${s.from} → ${s.to}`}
-                    {s.stops ? ` (${s.stops}정거장)` : ''}
+                    {s.stops ? t(` (${s.stops}정거장)`, ` (${s.stops} ${s.stops === 1 ? 'stop' : 'stops'})`) : ''}
                   </span>
-                  <span className="tabular">{s.minutes}분</span>
+                  <span className="tabular">{s.minutes}{t('분', ' min')}</span>
                 </li>
               );
             })}
@@ -53,7 +54,7 @@ export function TransitCard({ route, title }: { route: Route; title?: string }) 
         route.note && <p className="hint mt-0">{route.note}</p>
       )}
       <a className="btn-line transit-kakao" href={route.kakaoUrl} target="_blank" rel="noreferrer">
-        카카오맵에서 길찾기 <ArrowUpRight size={14} aria-hidden />
+        {t('카카오맵에서 길찾기', 'Directions in Kakao Map')} <ArrowUpRight size={14} aria-hidden />
       </a>
     </div>
   );
@@ -79,7 +80,7 @@ export function RouteFromHere({ to, toName }: { to: { lat: number; lng: number }
       .query({
         query: TransitDoc,
         // Only lat/lng: a course origin from the cache also carries __typename, which the input type rejects.
-        variables: { from: { lat: pos.coords.latitude, lng: pos.coords.longitude }, to: { lat: to.lat, lng: to.lng }, fromName: '내 위치', toName },
+        variables: { from: { lat: pos.coords.latitude, lng: pos.coords.longitude }, to: { lat: to.lat, lng: to.lng }, fromName: t('내 위치', 'My location'), toName },
         fetchPolicy: 'network-only',
       })
       .catch(() => ({ data: undefined }));
@@ -91,15 +92,15 @@ export function RouteFromHere({ to, toName }: { to: { lat: number; lng: number }
     setState('idle');
   }
 
-  if (route) return <TransitCard route={route} title={`내 위치 → ${toName}`} />;
+  if (route) return <TransitCard route={route} title={`${t('내 위치', 'My location')} → ${toName}`} />;
   return (
     <div>
       <button type="button" className="btn-line" disabled={state === 'locating' || state === 'loading'} onClick={find}>
         <NavigationArrow size={16} aria-hidden />
-        {state === 'locating' ? '위치 확인 중…' : state === 'loading' ? '길 찾는 중…' : `내 위치에서 ${toName}까지 가는 길`}
+        {state === 'locating' ? t('위치 확인 중…', 'Finding you…') : state === 'loading' ? t('길 찾는 중…', 'Finding a route…') : t(`내 위치에서 ${toName}까지 가는 길`, `How to get to ${toName} from here`)}
       </button>
-      {state === 'denied' && <p className="hint">위치를 알 수 없어요. 브라우저에서 위치 권한을 허용하거나, 카카오맵에서 길을 찾아 주세요.</p>}
-      {state === 'error' && <p className="hint">길을 불러오지 못했어요. 잠시 뒤 다시 해 주세요.</p>}
+      {state === 'denied' && <p className="hint">{t('위치를 알 수 없어요. 브라우저에서 위치 권한을 허용하거나, 카카오맵에서 길을 찾아 주세요.', "Can't find your location. Allow location in your browser, or look up the way in Kakao Map.")}</p>}
+      {state === 'error' && <p className="hint">{t('길을 불러오지 못했어요. 잠시 뒤 다시 해 주세요.', "Couldn't load the route. Please try again in a moment.")}</p>}
     </div>
   );
 }

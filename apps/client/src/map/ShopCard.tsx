@@ -2,6 +2,8 @@ import { ArrowUpRight, X } from '@phosphor-icons/react';
 import { useEffect } from 'react';
 import { ShopActions } from '../me/ShopActions';
 import { useRecordShop, useShopStates } from '../me/useMyShops';
+import { t } from '../i18n';
+import { categoryLabel } from '../shop/ShopDetail';
 import { CATEGORY_BY_ID } from './categories';
 import type { MapShop } from './ShopMap';
 
@@ -21,20 +23,20 @@ export function ShopCard({ shop, onClose }: { shop: MapShop; onClose: () => void
           <p className="eyebrow mb-1">
             <span>
               <span className="chip-dot me-1" style={{ background: category?.color }} />
-              {category?.label ?? shop.category}
-              {shop.inMarket && ' · 전통시장'}
+              {categoryLabel(shop.category) ?? shop.category}
+              {shop.inMarket && t(' · 전통시장', ' · Traditional market')}
             </span>
           </p>
           <h2>{shop.name}</h2>
           {shop.roadAddress && <div className="small text-secondary">{shop.roadAddress}</div>}
         </div>
-        <button type="button" className="icon-btn" aria-label="닫기" onClick={onClose}>
+        <button type="button" className="icon-btn" aria-label={t('닫기', 'Close')} onClick={onClose}>
           <X size={20} />
         </button>
       </div>
       {shop.placeUrl && (
         <a className="small d-inline-flex align-items-center gap-1 mt-2" href={shop.placeUrl} target="_blank" rel="noreferrer">
-          카카오맵에서 보기 <ArrowUpRight size={12} aria-hidden />
+          {t('카카오맵에서 보기', 'View on Kakao Map')} <ArrowUpRight size={12} aria-hidden />
         </a>
       )}
       <ShopActions shopId={shop.id} state={states.get(shop.id)} />

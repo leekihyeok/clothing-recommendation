@@ -45,6 +45,9 @@ export class SampleShop {
   @Field(() => [String], { description: '근거 글 제목 (최근 3개)' })
   evidence: string[];
 
+  @Field(() => [String], { description: '다루는 브랜드 (pipeline.brands: 이름에서 / 글에서)' })
+  brands: string[];
+
   @Field({ nullable: true })
   placeUrl?: string;
 
@@ -106,7 +109,9 @@ export class QualityResolver {
               (SELECT coalesce(array_agg(t ORDER BY o), '{}') FROM (
                  SELECT f.title AS t, row_number() OVER (ORDER BY f.posted_on DESC NULLS LAST) AS o
                  FROM shop_facts f WHERE f.shop_id = s.id LIMIT 3) e) AS evidence,
-              (SELECT q.verdict FROM quality_labels q WHERE q.shop_id = s.id ORDER BY q.created_at DESC LIMIT 1) AS verdict
+              (SELECT q.verdict FROM quality_labels q WHERE q.shop_id = s.id ORDER BY q.created_at DESC LIMIT 1) AS verdict,
+              (SELECT coalesce(array_agg(b.name ORDER BY sb.source), '{}') FROM shop_brands sb JOIN brands b ON b.key = sb.brand_key
+                 WHERE sb.shop_id = s.id) AS brands
        FROM shops s
        WHERE s.status = 'candidate' AND s.kind = 'store' AND s.scored_at IS NOT NULL
          AND EXISTS (SELECT 1 FROM regions g WHERE g.name = $1 AND ST_Intersects(g.polygon, s.geom))
@@ -116,7 +121,7 @@ export class QualityResolver {
     );
     return r.rows.map((x) => ({
       id: x.id, name: cleanName(x.name), category: x.category, summary: x.summary ?? undefined, reason: x.reason_material ?? undefined,
-      styles: x.styles, confidence: x.confidence ?? undefined, evidence: x.evidence, placeUrl: x.place_url ?? undefined, verdict: x.verdict ?? undefined,
+      styles: x.styles, confidence: x.confidence ?? undefined, evidence: x.evidence, brands: x.brands, placeUrl: x.place_url ?? undefined, verdict: x.verdict ?? undefined,
     }));
   }
 

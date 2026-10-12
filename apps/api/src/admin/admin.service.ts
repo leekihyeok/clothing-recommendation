@@ -56,6 +56,7 @@ export class AdminService {
     // as visited afterwards; completed when every stop of one of its versions was.
     const [outcomes] = await q<{
       courses: number; shared: number; share_opens: number; reopened: number; edited: number; started: number; completed: number;
+      walk_mode: number;
     }>(
       `WITH c AS (
          SELECT id, user_id, created_at, result, edits FROM courses
@@ -76,7 +77,9 @@ export class AdminService {
               (SELECT count(DISTINCT course_id)::int FROM app_events WHERE kind = 'reopen' AND course_id IN (SELECT id FROM c)) AS reopened,
               (SELECT count(*)::int FROM c WHERE jsonb_array_length(edits) > 0) AS edited,
               (SELECT count(DISTINCT id)::int FROM walked WHERE visited > 0) AS started,
-              (SELECT count(DISTINCT id)::int FROM walked WHERE visited = n AND n > 0) AS completed`,
+              (SELECT count(DISTINCT id)::int FROM walked WHERE visited = n AND n > 0) AS completed,
+              (SELECT count(DISTINCT course_id)::int FROM app_events
+               WHERE kind = 'walk' AND data->>'action' = 'start' AND course_id IN (SELECT id FROM c)) AS walk_mode`,
     );
 
     const editsByOp = await q<{ op: string; n: number }>(

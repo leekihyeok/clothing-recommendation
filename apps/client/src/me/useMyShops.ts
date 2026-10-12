@@ -24,6 +24,12 @@ const RecordDoc = graphql(`
   }
 `);
 
+export const SavedGroupsDoc = graphql(`
+  query MySavedGroups {
+    mySavedGroups { name regionId center { lat lng } shops { id name } }
+  }
+`);
+
 const ForgetDoc = graphql(`
   mutation ForgetMe {
     forgetMe
@@ -42,7 +48,7 @@ export function useShopStates(shopIds: string[]) {
 export function useRecordShop() {
   const [record, { loading }] = useMutation(RecordDoc, {
     // "내 가게" lists change with saves and visits.
-    refetchQueries: [MyShopsDoc],
+    refetchQueries: [MyShopsDoc, SavedGroupsDoc],
   });
   return {
     busy: loading,
@@ -53,6 +59,10 @@ export function useRecordShop() {
 
 export function useMyShops(skip = false) {
   return useQuery(MyShopsDoc, { skip, fetchPolicy: 'cache-and-network' });
+}
+
+export function useSavedGroups(skip = false) {
+  return useQuery(SavedGroupsDoc, { skip, fetchPolicy: 'cache-and-network' });
 }
 
 export function useForgetMe() {

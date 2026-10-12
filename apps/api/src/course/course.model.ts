@@ -1,6 +1,7 @@
 import { Field, Float, ID, InputType, Int, ObjectType } from '@nestjs/graphql';
 import { LatLng } from '../regions/regions.resolver';
 import { BoundsInput } from '../shops/shops.model';
+import { BrandRef } from '../shops/brands';
 
 @InputType()
 export class LatLngInput {
@@ -27,6 +28,42 @@ export class OriginInput {
 
   @Field(() => BoundsInput, { nullable: true, description: '지도 화면 영역: 지역을 고르지 않았으면 이 안의 가게로만 짠다' })
   bounds?: BoundsInput;
+}
+
+@InputType({ description: '끝나는 곳: 지도·글에서 고른 점, 또는 출발점으로 돌아오기' })
+export class EndInput {
+  @Field(() => LatLngInput, { nullable: true })
+  point?: LatLngInput;
+
+  @Field({ nullable: true, description: '끝나는 장소 이름 (예: 합정역)' })
+  label?: string;
+
+  @Field({ nullable: true, description: '출발점으로 돌아오기' })
+  back?: boolean;
+}
+
+@ObjectType({ description: '코스를 짠 지도 화면 영역 (지역을 고르지 않고 "지도 가운데서" 짰을 때)' })
+export class MapArea {
+  @Field(() => Float)
+  swLat: number;
+
+  @Field(() => Float)
+  swLng: number;
+
+  @Field(() => Float)
+  neLat: number;
+
+  @Field(() => Float)
+  neLng: number;
+}
+
+@ObjectType({ description: '고정한 가게: 꼭 넣을 가게로 고르거나 코스에 직접 넣은 곳. 다시 짜도 남는다' })
+export class PinnedShop {
+  @Field(() => ID)
+  id: string;
+
+  @Field()
+  name: string;
 }
 
 @InputType()
@@ -73,7 +110,7 @@ export class CourseRequestInput {
   @Field(() => [ID], { nullable: true, description: '꼭 넣을 가게 (시간 안에 들어가면 반드시 넣는다)' })
   mustShopIds?: string[];
 
-  @Field({ nullable: true, description: '어떻게 요청했나 (통계용): buttons | here | point | text | photo | preset | again' })
+  @Field({ nullable: true, description: '어떻게 요청했나 (통계용): buttons | here | point | text | photo | preset | again | saved' })
   inputMode?: string;
 
   @Field(() => ID, { nullable: true, description: '이 코스에서 이어 가기: 그 코스의 마지막 가게에서 새 출발점까지 대중교통 안내' })
@@ -87,6 +124,42 @@ export class CourseRequestInput {
 
   @Field({ nullable: true, description: '누구 옷: men(남성복) | women(여성복). 비우면 상관없음' })
   gender?: string;
+
+  @Field({ nullable: true, description: '출발 시각 (서울, "2026-10-17T14:00"). 비우면 지금. 그때 여는 가게로 짠다' })
+  startAt?: string;
+
+  @Field({ nullable: true, description: '이 시각까지 끝내기 ("18:00"). 주면 시간은 출발부터 여기까지' })
+  endBy?: string;
+
+  @Field(() => EndInput, { nullable: true, description: '끝나는 곳. 비우면 마지막 가게에서 끝' })
+  end?: EndInput;
+
+  @Field(() => [String], { nullable: true, description: '찾는 브랜드 (brandSearch의 key, 최대 5개). 다루는 가게를 앞으로' })
+  brands?: string[];
+
+  @Field({ nullable: true, description: 'false면 날씨를 반영하지 않는다 (기본: 비·눈·더위·추위면 실내 위주, 덜 걷게)' })
+  weather?: boolean;
+}
+
+@ObjectType({ description: '코스 시간대의 날씨 (Open-Meteo 예보)' })
+export class CourseWeather {
+  @Field({ description: 'fine | rain | snow | hot | cold' })
+  condition: string;
+
+  @Field({ description: '"비 70% · 18°"' })
+  summary: string;
+
+  @Field(() => Int)
+  rainChance: number;
+
+  @Field(() => Int)
+  tempC: number;
+
+  @Field({ description: '코스에 반영했나 (날씨가 나쁘고 반영을 끄지 않았을 때)' })
+  applied: boolean;
+
+  @Field({ nullable: true, description: '어떻게 반영했나 한 줄' })
+  note?: string;
 }
 
 @ObjectType({ description: '코스 중간에 쉬어 가는 곳: 카페나 맛집 (가게 목록과 별도, 카카오 장소 검색)' })
@@ -223,6 +296,36 @@ export class ResolvedRequest {
   @Field({ nullable: true, description: 'men | women (남성복 / 여성복), 없으면 상관없음' })
   gender?: string;
 
+  @Field({ nullable: true, description: '고른 출발 시각 ("2026-10-17T14:00"), 지금 출발이면 없음' })
+  startAt?: string;
+
+  @Field({ nullable: true, description: '이 시각까지 끝내기 ("18:00")' })
+  endBy?: string;
+
+  @Field({ nullable: true, description: '출발점으로 돌아오는 코스' })
+  roundTrip?: boolean;
+
+  @Field(() => [BrandRef], { description: '찾은 브랜드' })
+  brands: BrandRef[];
+
+  @Field(() => [PinnedShop], { description: '고정한 가게 (다른 코스·다시 짜기에도 넣는다)' })
+  mustShops: PinnedShop[];
+
+  @Field({ description: '다녀온 가게는 넣지 않기' })
+  skipVisited: boolean;
+
+  @Field(() => MapArea, { nullable: true, description: '이 지도 화면 안에서만 짰으면 그 영역 (다시 짤 때도 같은 영역)' })
+  bounds?: MapArea;
+
+  @Field({ description: '날씨 반영을 껐나' })
+  ignoreWeather: boolean;
+
+  @Field(() => ID, { nullable: true, description: '같이 가기로 짠 코스면 그 같이 가기' })
+  groupId?: string;
+
+  @Field(() => [String], { nullable: true, description: '같이 가는 사람 이름 (취향을 섞은 사람들)' })
+  groupNames?: string[];
+
   @Field(() => [String], { description: '기본값으로 채운 칸 (칩을 흐리게 표시)' })
   defaultedFields: string[];
 }
@@ -274,8 +377,17 @@ export class CourseShop {
   @Field({ description: '근거(블로그 등)를 찾지 못한 가게: "정보가 적은 가게"로 표시' })
   littleKnown: boolean;
 
-  @Field({ nullable: true, description: '사장님이 올린 오늘 영업시간 ("오늘 11:00–21:00"). 없으면 영업시간 확인 필요' })
+  @Field({ nullable: true, description: '코스 날의 영업시간 ("오늘 11:00–21:00", "토 쉬는 날"). 없으면 영업시간 확인 필요' })
   hoursToday?: string;
+
+  @Field({ nullable: true, description: '영업시간 출처: owner(사장님) | blog(블로그 글)' })
+  hoursSource?: string;
+
+  @Field({ nullable: true, description: '도착할 때 닫혀 있으면 안내 ("도착(19:40) 때는 문을 닫아요")' })
+  hoursWarning?: string;
+
+  @Field({ nullable: true, description: '사장님 소식으로 진행 중인 것 ("세일 중", "신상 입고", "이벤트 중")' })
+  newsTag?: string;
 }
 
 @ObjectType()
@@ -303,6 +415,12 @@ export class CourseStop {
 
   @Field(() => Leg)
   legFromPrev: Leg;
+
+  @Field({ nullable: true, description: '출발 시각을 골랐으면 도착 예정 시각 ("14:20")' })
+  arriveAt?: string;
+
+  @Field(() => [String], { nullable: true, description: '조건에서 고른 브랜드 중 이 가게가 다루는 것 (다시 짜도 브랜드마다 한 곳은 넣는다). 예전 코스는 없음' })
+  brands?: string[];
 }
 
 @ObjectType({ description: '추천 / 가까운 위주 / 취향 우선 중 하나' })
@@ -330,6 +448,12 @@ export class CourseVariant {
 
   @Field(() => [BreakStop], { nullable: true, description: '쉬어 가는 곳 (카페·맛집), 최대 종류별 하나' })
   breaks?: BreakStop[];
+
+  @Field(() => Leg, { nullable: true, description: '마지막 가게 → 끝나는 곳 (정했을 때)' })
+  endLeg?: Leg;
+
+  @Field({ nullable: true, description: '출발 시각을 골랐으면 끝나는 예정 시각 ("17:40")' })
+  finishAt?: string;
 }
 
 @ObjectType()
@@ -345,6 +469,15 @@ export class Course {
 
   @Field({ nullable: true, description: '출발 장소 이름 (지역을 고르면 가까운 지하철역)' })
   startName?: string;
+
+  @Field(() => LatLng, { nullable: true, description: '끝나는 곳 (정했을 때)' })
+  end?: LatLng;
+
+  @Field({ nullable: true, description: '끝나는 곳 이름 (합정역, 출발점 …)' })
+  endName?: string;
+
+  @Field(() => CourseWeather, { nullable: true, description: '코스 시간대 날씨 (예보가 없으면 없음)' })
+  weather?: CourseWeather;
 
   @Field(() => [CourseVariant], { description: '첫 번째가 추천 코스' })
   variants: CourseVariant[];
@@ -402,4 +535,7 @@ export class CourseEditResult {
 
   @Field({ nullable: true, description: '무엇을 바꿨는지 한 줄' })
   message?: string;
+
+  @Field(() => [PinnedShop], { description: '고친 뒤의 고정한 가게' })
+  mustShops: PinnedShop[];
 }

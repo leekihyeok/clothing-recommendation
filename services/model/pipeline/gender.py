@@ -94,9 +94,10 @@ def run(dry_run: bool) -> dict:
     with connect() as conn, pipeline_run(conn, "gender") as stats:
         rows = conn.execute(
             """SELECT s.id, s.kind, s.name, coalesce(s.summary, ''), s.gender, s.gender_source, s.category,
-                      coalesce(array_agg(r.category_name) FILTER (WHERE r.source = 'kakao' AND r.category_name IS NOT NULL), '{}'),
-                      coalesce(array_agg(r.category_name) FILTER (WHERE r.source <> 'kakao' AND r.category_name IS NOT NULL), '{}'),
-                      coalesce(array_agg(r.name) FILTER (WHERE r.source = 'kakao'), '{}')
+                      coalesce(array_agg(r.category_name ORDER BY r.id) FILTER (WHERE r.source = 'kakao' AND r.category_name IS NOT NULL), '{}'),
+                      coalesce(array_agg(r.category_name ORDER BY r.id) FILTER (WHERE r.source <> 'kakao' AND r.category_name IS NOT NULL), '{}'),
+                      -- the first Kakao name gives the brand key: a fixed order, or the answer changed run to run
+                      coalesce(array_agg(r.name ORDER BY r.id) FILTER (WHERE r.source = 'kakao'), '{}')
                FROM shops s LEFT JOIN raw_sources r ON r.shop_id = s.id
                WHERE s.status = 'candidate'
                GROUP BY s.id"""

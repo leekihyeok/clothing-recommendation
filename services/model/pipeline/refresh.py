@@ -22,9 +22,9 @@ import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from pipeline import aliases, blogs, classify, closures, dedupe, kakao, merge_dupes, presets, quality_run
+from pipeline import aliases, blogs, classify, closures, dedupe, kakao, merge_dupes, presets, quality_run, retention
 from pipeline.db import connect, pipeline_run
-from pipeline.quality_run import PRIORITY, STOP_FILE, log, process, remaining
+from pipeline.quality_run import PRIORITY, STOP_FILE, catch_up, gave_up_recently, label_of, log, process, remaining, start_heartbeat
 
 WEEK = timedelta(days=7)
 MONTH = timedelta(days=30)
@@ -54,6 +54,8 @@ def weekly() -> dict:
         stats["stale"] = _short(closures.stale_check(STALE_PER_WEEK))
         stats["closures"] = _short(closures.run(None))
         stats["presets"] = len(presets.run(2, 8, False)["presets"])
+        # Personal data past its keep-by date (pipeline.retention).
+        stats["retention"] = _short(retention.run(False))
     return stats
 
 
@@ -95,6 +97,9 @@ def quality_items():
 
 def next_quality_item():
     for region, categories in quality_items():
+        # A region whose step was just given up waits a few hours, so the others aren't stuck behind it.
+        if gave_up_recently(label_of(region, categories)):
+            continue
         if any(remaining(region, categories)):
             return region, categories
     return None
@@ -117,11 +122,14 @@ def tick() -> bool:
     if item:
         process(*item)
         did = True
+    elif catch_up():
+        did = True
     return did
 
 
 def main(once: bool) -> None:
     log("refresh: start")
+    start_heartbeat()
     reminded = None
     while True:
         if STOP_FILE.exists():

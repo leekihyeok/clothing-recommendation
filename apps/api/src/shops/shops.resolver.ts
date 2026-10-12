@@ -18,7 +18,9 @@ END`;
  * Name to show: Kakao's place name when the shop is on Kakao ("무신사 킥스 성수"), otherwise ours. Public-data names
  * often carry a company prefix or a doubled brand ("무신사무신사킥스성수").
  */
-export const DISPLAY_NAME_SQL = `coalesce((SELECT r.name FROM raw_sources r WHERE r.shop_id = s.id AND r.source = 'kakao' ORDER BY r.id LIMIT 1), s.name)`;
+// Kakao's name first (public data has company names). Not for a department store / mall (kind complex): the Kakao
+// place merged into it is one of the stores inside ("몽클레르 갤러리아백화점 EAST점"), the building's own name is ours.
+export const DISPLAY_NAME_SQL = `CASE WHEN s.kind = 'complex' THEN s.name ELSE coalesce((SELECT r.name FROM raw_sources r WHERE r.shop_id = s.id AND r.source = 'kakao' ORDER BY r.id LIMIT 1), s.name) END`;
 
 /**
  * Kakao map level (1 = street, 14 = country) → how many of the most notable shops in view to show.

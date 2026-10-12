@@ -1,3 +1,4 @@
+import { inLang } from '../infra/translations';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DbService } from '../infra/db.service';
 import { cleanName } from './names';
@@ -93,10 +94,12 @@ export class ShopDetailService {
       ? (await this.db.pool.query<ReviewRow>(`${REVIEW_SQL} WHERE r.shop_id = $1 AND r.user_id = $2`, [shopId, viewer])).rows[0]
       : undefined;
 
+    const en = await inLang(this.db.pool, [s.summary, s.reason_material]);
     return {
       id: s.id, name: cleanName(s.name), kind: s.kind, category: s.category, status: s.status, lat: s.lat, lng: s.lng,
       roadAddress: s.road_address ?? undefined, phone: s.phone ?? undefined, placeUrl: s.place_url ?? undefined, inMarket: s.in_market,
-      summary: s.summary ?? undefined, reason: s.reason_material ?? undefined, priceRange: s.price_range ?? undefined, items: s.items,
+      summary: s.summary ? (en.get(s.summary) ?? s.summary) : undefined,
+      reason: s.reason_material ? (en.get(s.reason_material) ?? s.reason_material) : undefined, priceRange: s.price_range ?? undefined, items: s.items,
       styles: s.styles, littleKnown: Number(s.posts) === 0,
       saves: people.rows[0].saves, visitors: people.rows[0].visitors,
       rating: { average, count, histogram },

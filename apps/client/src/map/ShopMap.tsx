@@ -3,9 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import { graphql } from '../gql';
 import type { ShopsInBoundsQuery } from '../gql/graphql';
 import { CATEGORY_BY_ID } from './categories';
-import { Storefront } from '@phosphor-icons/react';
+import { Minus, Plus, Storefront } from '@phosphor-icons/react';
+import { attachTouchFallback, needsTouchFallback } from './touchFallback';
 import { MapLegend } from './MapLegend';
 import { type Kakao, loadKakaoMaps } from './kakao';
+import type { WalkState } from '../course/WalkMode';
+import { getLang, t } from '../i18n';
 
 const ShopsInBoundsDoc = graphql(`
   query ShopsInBounds($bounds: BoundsInput!, $categories: [String!], $regionId: ID, $level: Int) {
@@ -35,6 +38,10 @@ export interface MapCourse {
   }[];
   /** Breaks (café, meal: Kakao places), drawn as boxes so they read apart from the numbered shops. */
   breaks?: { kind: string; name: string; lat: number; lng: number; afterOrder: number }[] | null;
+  /** Where the walk ends when it isn't the last shop (a station, back to the start), and the walk there. */
+  end?: { lat: number; lng: number } | null;
+  endName?: string | null;
+  endLeg?: { path: { lat: number; lng: number }[] } | null;
 }
 
 export interface ViewportInfo {
@@ -53,12 +60,22 @@ interface Props {
   categories: string[];
   regions: MapRegion[];
   focusRegionId: string | null;
-  /** "지도에서 출발점 고르기": the next tap on the map sets the start. */
-  pickMode: boolean;
+  /** "지도에서 고르기": the next tap on the map sets the start or the finish. */
+  pickMode: 'start' | 'end' | null;
+  /** A course number on the map was tapped: show that stop's card. */
+  onStopClick?: (order: number) => void;
+  /** Stop picking without choosing (the banner's 취소, or Esc). */
+  onCancelPick?: () => void;
   pickedPoint: { lat: number; lng: number } | null;
+  /** The finish picked on the map, shown before a course is planned. */
+  pickedEnd: { lat: number; lng: number } | null;
+  /** Walk mode: my live position and the next place. */
+  walk: WalkState | null;
   onPickPoint: (p: { lat: number; lng: number }) => void;
   /** A shop picked from 내 가게: the map moves to it. */
   focusShop: { lat: number; lng: number } | null;
+  /** The shop whose page is open: marked on the map, and the map moves to it when it's out of view. */
+  shopPin?: { lat: number; lng: number; name: string } | null;
   course: MapCourse | null;
   hoverOrder: number | null;
   onSelect: (shop: MapShop | null) => void;
@@ -80,8 +97,8 @@ const SEONGSU = { lat: 37.5446, lng: 127.056 };
 const isPhone = () => window.matchMedia('(max-width: 767.98px)').matches;
 
 export function ShopMap({
-  categories, regions, focusRegionId, focusShop, pickMode, pickedPoint, onPickPoint, course, hoverOrder, onSelect, onViewport, onCenter, onBounds,
-  locateOnStart,
+  categories, regions, focusRegionId, focusShop, shopPin, pickMode, onCancelPick, onStopClick, pickedPoint, pickedEnd, walk, onPickPoint, course, hoverOrder, onSelect, onViewport, onCenter,
+  onBounds, locateOnStart,
 }: Props) {
   const apollo = useApolloClient();
   const container = useRef<HTMLDivElement>(null);
@@ -98,11 +115,16 @@ export function ShopMap({
   const [error, setError] = useState<string | null>(null);
   // "주변 가게 보기": with a course on screen, other shops nearby as faint pins — tap one to put it in the course.
   const [nearby, setNearby] = useState(false);
+  // The pick pins carry a word, so they are redrawn when the language changes.
+  const lang = getLang();
   // Latest props for the map's idle listener, which is registered once.
-  const latest = useRef({ categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby });
-  latest.current = { categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby };
+  const latest = useRef({ categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby, onStopClick, shopPin });
+  latest.current = { categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby, onStopClick, shopPin };
   const me = useRef<Kakao>(null);
   const pin = useRef<Kakao>(null);
+  const endPin = useRef<Kakao>(null);
+  const liveMe = useRef<Kakao>(null);
+  const walkFitted = useRef<string | null>(null);
 
   async function refresh() {
     const m = map.current;
@@ -153,8 +175,8 @@ export function ShopMap({
       const el = document.createElement('button');
       el.type = 'button';
       el.className = `shop-pin${shop.kind === 'complex' ? ' is-complex' : ''}${shop.labeled ? ' is-labeled' : ''}${aroundCourse ? ' is-nearby' : ''}`;
-      el.title = aroundCourse ? `${shop.name} · 눌러서 코스에 넣기` : shop.name;
-      el.setAttribute('aria-label', aroundCourse ? `${shop.name}, 코스에 넣을 수 있는 주변 가게` : shop.name);
+      el.title = aroundCourse ? t(`${shop.name} · 눌러서 코스에 넣기`, `${shop.name} · tap to add to the course`) : shop.name;
+      el.setAttribute('aria-label', aroundCourse ? t(`${shop.name}, 코스에 넣을 수 있는 주변 가게`, `${shop.name}, nearby shop you can add to the course`) : shop.name);
       const dot = document.createElement('span');
       dot.className = 'shop-dot';
       dot.style.background = CATEGORY_BY_ID[shop.category]?.color ?? '#a8a29e';
@@ -186,6 +208,7 @@ export function ShopMap({
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let detachTouch: (() => void) | undefined;
     loadKakaoMaps()
       .then((k) => {
         if (cancelled || !container.current) return;
@@ -194,10 +217,9 @@ export function ShopMap({
           center: new k.maps.LatLng(SEONGSU.lat, SEONGSU.lng),
           level: 4,
         });
-        // Phones pinch to zoom; the +/- control only takes space there.
-        if (!isPhone()) {
-          map.current.addControl(new k.maps.ZoomControl(), k.maps.ControlPosition.RIGHT);
-        }
+        // Zoom is our own +/- in the control stack (Kakao's control sat under "주변 가게" / the legend on narrow
+        // screens). Touch screens that Kakao treats as desktop get drag and pinch from us.
+        if (needsTouchFallback()) detachTouch = attachTouchFallback(container.current, map.current, k);
         k.maps.event.addListener(map.current, 'idle', () => {
           clearTimeout(timer);
           timer = setTimeout(() => refresh().catch((e) => setError(String(e))), 250);
@@ -215,11 +237,12 @@ export function ShopMap({
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const { latitude: lat, longitude: lng } = pos.coords;
-              if (cancelled || !inSeoul(lat, lng) || latest.current.course) return;
+              // A course or a shop from a link is what the map should show, not where I am.
+              if (cancelled || !inSeoul(lat, lng) || latest.current.course || latest.current.shopPin) return;
               const here = new k.maps.LatLng(lat, lng);
               const dot = document.createElement('div');
               dot.className = 'me-dot';
-              dot.setAttribute('aria-label', '내 위치');
+              dot.setAttribute('aria-label', t('내 위치', 'You are here'));
               me.current = new k.maps.CustomOverlay({ map: map.current, position: here, content: dot, zIndex: 6 });
               map.current.setLevel(4);
               map.current.setCenter(here);
@@ -231,6 +254,7 @@ export function ShopMap({
       })
       .catch((e: Error) => setError(e.message));
     return () => {
+      detachTouch?.();
       cancelled = true;
       clearTimeout(timer);
     };
@@ -311,8 +335,24 @@ export function ShopMap({
       name.textContent = s.shop.name;
       el.append(num, name);
       el.title = s.shop.name;
+      // Tap (or Enter) on a number: the list scrolls to that stop's card.
+      el.setAttribute('role', 'button');
+      el.tabIndex = 0;
+      el.setAttribute('aria-label', t(`${s.order}번 ${s.shop.name} 카드 보기`, `Show stop ${s.order}, ${s.shop.name}`));
+      const open = (e: Event) => {
+        e.stopPropagation();
+        latest.current.onStopClick?.(s.order);
+      };
+      el.addEventListener('click', open);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          open(e);
+        }
+      });
       stopEls.current.set(s.order, el);
-      courseLayer.current.push(new k.maps.CustomOverlay({ map: map.current, position: pos, content: el, xAnchor: 0, yAnchor: 0.5, zIndex: 3 }));
+      // clickable: the overlay takes the tap itself instead of passing it to the map underneath.
+      courseLayer.current.push(new k.maps.CustomOverlay({ map: map.current, position: pos, content: el, xAnchor: 0, yAnchor: 0.5, zIndex: 3, clickable: true }));
     }
     for (const br of course.breaks ?? []) {
       const pos = new k.maps.LatLng(br.lat, br.lng);
@@ -320,12 +360,27 @@ export function ShopMap({
       const el = document.createElement('div');
       el.className = `break-marker is-${br.kind}`;
       breakEls.current.push({ el, lat: br.lat, lng: br.lng });
-      el.textContent = `${br.kind === 'food' ? '맛집' : '카페'} · ${br.name}`;
+      el.textContent = `${br.kind === 'food' ? t('맛집', 'Food') : t('카페', 'Café')} · ${br.name}`;
       courseLayer.current.push(new k.maps.CustomOverlay({ map: map.current, position: pos, content: el, yAnchor: 0.5, zIndex: 2 }));
     }
+    if (course.end) {
+      const pos = new k.maps.LatLng(course.end.lat, course.end.lng);
+      path.push(pos);
+      bounds.extend(pos);
+      const fin = document.createElement('div');
+      fin.className = 'course-start is-finish';
+      fin.textContent = course.endName ? `FINISH · ${course.endName}` : 'FINISH';
+      // Back to the start: the two labels would sit on each other, so the finish one goes below.
+      const same = Math.abs(course.end.lat - course.origin.lat) < 1e-5 && Math.abs(course.end.lng - course.origin.lng) < 1e-5;
+      courseLayer.current.push(new k.maps.CustomOverlay({ map: map.current, position: pos, content: fin, yAnchor: same ? -0.6 : 0.5 }));
+    }
     // Follow the streets when the legs carry a walking path; otherwise this is the straight line through the stops.
-    const line = course.stops.some((st) => (st.legFromPrev?.path.length ?? 0) > 2)
-      ? course.stops.flatMap((st) => (st.legFromPrev?.path ?? [st.shop]).map((q) => new k.maps.LatLng(q.lat, q.lng)))
+    const streets = course.stops.some((st) => (st.legFromPrev?.path.length ?? 0) > 2);
+    const line = streets
+      ? [
+          ...course.stops.flatMap((st) => (st.legFromPrev?.path ?? [st.shop]).map((q) => new k.maps.LatLng(q.lat, q.lng))),
+          ...(course.end ? (course.endLeg?.path ?? [course.end]).map((q) => new k.maps.LatLng(q.lat, q.lng)) : []),
+        ]
       : path;
     for (const q of line) bounds.extend(q);
     courseLayer.current.push(
@@ -337,6 +392,33 @@ export function ShopMap({
     else map.current.setBounds(bounds, 60, 60, 60, 460);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, course]);
+
+  // The open shop's pin; the map goes there when the shop isn't in view (a link opened elsewhere, a similar shop
+  // across the river), and stays put when it already is.
+  const pinRef = useRef<{ setMap: (m: unknown) => void } | null>(null);
+  useEffect(() => {
+    const k = kakao.current;
+    pinRef.current?.setMap(null);
+    pinRef.current = null;
+    if (!ready || !k || !shopPin) return;
+    const pos = new k.maps.LatLng(shopPin.lat, shopPin.lng);
+    const el = document.createElement('div');
+    el.className = 'open-shop-pin';
+    el.textContent = shopPin.name;
+    el.setAttribute('aria-hidden', 'true');
+    pinRef.current = new k.maps.CustomOverlay({ map: map.current, position: pos, content: el, yAnchor: 1.15, zIndex: 100_000 }) // above every shop marker (theirs count down from the number of shops);
+    // In view = on the part of the map the panel doesn't cover (left 460 px on desktop, the half sheet on phones).
+    const box = container.current?.getBoundingClientRect();
+    const pt = map.current.getProjection().containerPointFromCoords(pos);
+    const phone = isPhone();
+    const seen = !!box && map.current.getBounds().contain(pos) && (phone ? pt.y > 40 && pt.y < box.height * 0.4 : pt.x > 480 && pt.x < box.width - 40);
+    if (!seen) {
+      if (map.current.getLevel() > 4) map.current.setLevel(3);
+      map.current.setCenter(pos);
+      // Move the shop from the middle into the open part of the map.
+      if (box) map.current.panBy(phone ? 0 : -230, phone ? Math.round(box.height * 0.29) : 0);
+    }
+  }, [ready, shopPin?.lat, shopPin?.lng, shopPin?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const k = kakao.current;
@@ -410,7 +492,7 @@ export function ShopMap({
     if (!pickedPoint || course) return;
     const el = document.createElement('div');
     el.className = 'pick-pin';
-    el.textContent = '출발';
+    el.textContent = t('출발', 'Start');
     pin.current = new k.maps.CustomOverlay({
       map: map.current,
       position: new k.maps.LatLng(pickedPoint.lat, pickedPoint.lng),
@@ -418,7 +500,59 @@ export function ShopMap({
       yAnchor: 1,
       zIndex: 5,
     });
-  }, [ready, pickedPoint, course]);
+  }, [ready, pickedPoint, course, lang]);
+
+  // The finish picked on the map, until a course is shown (the course has its own FINISH).
+  useEffect(() => {
+    const k = kakao.current;
+    if (!ready || !k) return;
+    endPin.current?.setMap(null);
+    endPin.current = null;
+    if (!pickedEnd || course) return;
+    const el = document.createElement('div');
+    el.className = 'pick-pin is-end';
+    el.textContent = t('도착', 'Finish');
+    endPin.current = new k.maps.CustomOverlay({
+      map: map.current,
+      position: new k.maps.LatLng(pickedEnd.lat, pickedEnd.lng),
+      content: el,
+      yAnchor: 1,
+      zIndex: 5,
+    });
+  }, [ready, pickedEnd, course, lang]);
+
+  // Walk mode: my position as a live dot, the next stop highlighted, and the map framing me and it whenever the next
+  // place changes (not on every GPS fix — the map shouldn't jump while someone is looking at it).
+  useEffect(() => {
+    const k = kakao.current;
+    if (!ready || !k) return;
+    if (!walk?.me) {
+      liveMe.current?.setMap(null);
+      liveMe.current = null;
+      if (!walk) walkFitted.current = null;
+    } else {
+      const here = new k.maps.LatLng(walk.me.lat, walk.me.lng);
+      if (!liveMe.current) {
+        const dot = document.createElement('div');
+        dot.className = 'me-dot is-live';
+        dot.setAttribute('aria-label', t('내 위치', 'You are here'));
+        liveMe.current = new k.maps.CustomOverlay({ map: map.current, position: here, content: dot, zIndex: 7 });
+        me.current?.setMap(null); // the start-up dot gives way to the live one
+      } else liveMe.current.setPosition(here);
+    }
+    for (const [order, el] of stopEls.current) el.classList.toggle('is-next', !!walk?.next && walk.next.order === order);
+    const target = walk?.next ? `${walk.next.lat},${walk.next.lng}` : null;
+    if (walk?.me && walk.next && walkFitted.current !== target) {
+      walkFitted.current = target;
+      const b = new k.maps.LatLngBounds();
+      b.extend(new k.maps.LatLng(walk.me.lat, walk.me.lng));
+      b.extend(new k.maps.LatLng(walk.next.lat, walk.next.lng));
+      if (isPhone()) map.current.setBounds(b, 64, 40, Math.round(window.innerHeight * 0.58), 40);
+      else map.current.setBounds(b, 80, 80, 80, 480);
+      // Standing next to the shop: don't zoom in past street level (closer, the map has no detail left to show).
+      if (map.current.getLevel() < 3) map.current.setLevel(3);
+    }
+  }, [ready, walk]);
 
   // Hovering a course card highlights its marker.
   useEffect(() => {
@@ -429,16 +563,31 @@ export function ShopMap({
     <>
       <div ref={container} className={`map-canvas${pickMode ? ' is-picking' : ''}`} />
       {pickMode && (
-        <div className="pick-banner" role="status">
-          지도를 눌러 출발점을 정하세요
+        <div className="pick-banner">
+          <span role="status">
+            {pickMode === 'end' ? t('지도를 눌러 끝나는 곳을 정하세요', 'Tap the map to set where you finish') : t('지도를 눌러 출발점을 정하세요', 'Tap the map to set your start')}
+          </span>
+          {onCancelPick && (
+            <button type="button" className="pick-cancel" onClick={onCancelPick}>
+              {t('취소', 'Cancel')}
+            </button>
+          )}
         </div>
       )}
       {/* One stack of map controls: "주변 가게" (with a course) above the legend. */}
       <div className="map-controls">
+        <div className="map-zoom" role="group" aria-label={t('지도 확대·축소', 'Map zoom')}>
+          <button type="button" aria-label={t('확대', 'Zoom in')} onClick={() => map.current?.setLevel(Math.max(1, map.current.getLevel() - 1), { animate: true })}>
+            <Plus size={18} aria-hidden />
+          </button>
+          <button type="button" aria-label={t('축소', 'Zoom out')} onClick={() => map.current?.setLevel(Math.min(14, map.current.getLevel() + 1), { animate: true })}>
+            <Minus size={18} aria-hidden />
+          </button>
+        </div>
         {course && !pickMode && (
           <button type="button" className={`map-toggle${nearby ? ' is-on' : ''}`} aria-pressed={nearby} onClick={() => setNearby(!nearby)}>
             <Storefront size={16} aria-hidden />
-            <span>주변 가게</span>
+            <span>{t('주변 가게', 'Nearby shops')}</span>
             <span className="map-switch" aria-hidden />
           </button>
         )}

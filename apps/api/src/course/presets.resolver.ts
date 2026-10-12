@@ -1,3 +1,4 @@
+import { inLang } from '../infra/translations';
 import { Args, Context, Field, ID, Int, ObjectType, Query, Resolver } from '@nestjs/graphql';
 import { DbService } from '../infra/db.service';
 import { MeService, type Request } from '../me/me.service';
@@ -59,7 +60,9 @@ export class PresetsResolver {
         return { p, score: p.rank * (p.styles.some((s) => liked.has(s)) ? 2 : 1) * (repeat ? REPEAT_REGION : 1) };
       })
       .sort((a, b) => b.score - a.score)
-      .map(({ p }) => ({ ...p, intro: p.intro ?? undefined }));
-    return list.slice(0, Math.min(Math.max(limit, 1), 30));
+      .map(({ p }) => ({ ...p, intro: p.intro ?? undefined }))
+      .slice(0, Math.min(Math.max(limit, 1), 30));
+    const en = await inLang(this.db.pool, list.flatMap((p) => [p.title, p.intro, p.regionName]));
+    return list.map((p) => ({ ...p, title: en.get(p.title) ?? p.title, intro: p.intro ? (en.get(p.intro) ?? p.intro) : undefined, regionName: en.get(p.regionName) ?? p.regionName }));
   }
 }

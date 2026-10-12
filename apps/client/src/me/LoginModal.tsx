@@ -1,5 +1,6 @@
 import { X } from '@phosphor-icons/react';
 import { useEffect, useRef, useState } from 'react';
+import { t } from '../i18n';
 import { KakaoSymbol } from './AccountBox';
 import { loginUrl } from './useAccount';
 
@@ -42,30 +43,30 @@ export function LoginModal() {
       }}
     >
       <div className="login-box">
-        <button type="button" className="icon-btn login-close" aria-label="닫기" onClick={close}>
+        <button type="button" className="icon-btn login-close" aria-label={t('닫기', 'Close')} onClick={close}>
           <X size={20} />
         </button>
         <p className="eyebrow mb-2">
           <span>Login</span>
         </p>
         <h2 id="login-title" className="course-title">
-          로그인이 필요해요
+          {t('로그인이 필요해요', 'Please log in')}
         </h2>
-        <p className="login-reason">{reason ?? '찜, 후기, 코스 저장은 로그인하면 할 수 있어요.'}</p>
+        <p className="login-reason">{reason ?? t('찜, 후기, 코스 저장은 로그인하면 할 수 있어요.', 'Log in to save shops, write reviews and keep courses.')}</p>
         <ul className="login-perks">
-          <li>찜한 가게와 저장한 코스가 다른 기기에서도 이어져요</li>
-          <li>후기와 별점을 남길 수 있어요</li>
-          <li>좋아한 가게로 취향을 배워 다음 코스를 더 잘 골라요</li>
+          <li>{t('찜한 가게와 저장한 코스가 다른 기기에서도 이어져요', 'Your saved shops and courses follow you to any device')}</li>
+          <li>{t('후기와 별점을 남길 수 있어요', 'Leave reviews and ratings')}</li>
+          <li>{t('좋아한 가게로 취향을 배워 다음 코스를 더 잘 골라요', 'We learn your taste from shops you like and pick better courses')}</li>
         </ul>
         {/* autoFocus: the dialog's one real action gets focus when it opens */}
         <a className="kakao-login" href={loginUrl()} autoFocus>
           <KakaoSymbol />
-          카카오로 계속하기
+          {t('카카오로 계속하기', 'Continue with Kakao')}
         </a>
         <button type="button" className="btn-text w-100 justify-content-center mt-1" onClick={close}>
-          나중에
+          {t('나중에', 'Not now')}
         </button>
-        <p className="login-note">로그인 전 이 브라우저에 남긴 기록도 계정으로 옮겨져요.</p>
+        <p className="login-note">{t('로그인 전 이 브라우저에 남긴 기록도 계정으로 옮겨져요.', 'Anything you did in this browser before logging in moves to your account.')}</p>
       </div>
     </dialog>
   );

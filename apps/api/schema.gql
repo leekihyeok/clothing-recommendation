@@ -20,6 +20,9 @@ type AdminClaim {
   businessNo: String!
   contact: String!
   createdAt: DateTime!
+
+  """사업자등록증 사진이 남아 있나 (승인·거절하면 지운다)"""
+  hasDocument: Boolean!
   id: ID!
   message: String
   nickname: String!
@@ -52,6 +55,24 @@ input BoundsInput {
   neLng: Float!
   swLat: Float!
   swLng: Float!
+}
+
+"""브랜드 (pipeline.brands의 브랜드 사전)"""
+type BrandRef {
+  """그 가게가 많은 지역 (많은 순, 최대 2곳)"""
+  areas: [String!]!
+
+  """정규화한 이름 (예: adererror)"""
+  key: ID!
+
+  """보여 줄 이름 (예: 아더에러)"""
+  name: String!
+
+  """영문 표기"""
+  nameEn: String
+
+  """이 브랜드를 다루는 가게 수"""
+  shops: Int!
 }
 
 """코스 중간에 쉬어 가는 곳: 카페나 맛집 (가게 목록과 별도, 카카오 장소 검색)"""
@@ -115,6 +136,12 @@ type CombinedRating {
 
 type Course {
   createdAt: DateTime!
+
+  """끝나는 곳 (정했을 때)"""
+  end: LatLng
+
+  """끝나는 곳 이름 (합정역, 출발점 …)"""
+  endName: String
   id: ID!
 
   """다른 코스에서 이어 왔으면 그 코스와 오는 길"""
@@ -130,6 +157,9 @@ type Course {
 
   """첫 번째가 추천 코스"""
   variants: [CourseVariant!]!
+
+  """코스 시간대 날씨 (예보가 없으면 없음)"""
+  weather: CourseWeather
 }
 
 """코스 고치기 한 번. op: remove | replace | move | add | replan"""
@@ -165,7 +195,33 @@ type CourseEditResult {
 
   """무엇을 바꿨는지 한 줄"""
   message: String
+
+  """고친 뒤의 고정한 가게"""
+  mustShops: [PinnedShop!]!
   variant: CourseVariant!
+}
+
+"""같이 가기: 친구들이 취향을 넣으면 모두에게 맞게 다시 짠다"""
+type CourseGroup {
+  """처음 코스"""
+  baseCourseId: ID!
+  id: ID!
+
+  """첫 번째가 만든 사람"""
+  members: [GroupMember!]!
+
+  """처음 코스의 출발점 (지역이 없을 때 지도를 거기로)"""
+  origin: LatLng
+
+  """코스 지역 (지도를 거기로)"""
+  regionId: ID
+
+  """코스 지역 이름"""
+  regionName: String
+
+  """모두의 취향으로 가장 최근에 짠 코스"""
+  resultCourseId: ID
+  updatedAt: DateTime!
 }
 
 """이어 가는 코스: 앞 코스와 거기서 오는 길"""
@@ -181,16 +237,27 @@ type CourseLink {
 
 """요청서. 비운 칸은 기본값으로 채운다"""
 input CourseRequestInput {
+  """찾는 브랜드 (brandSearch의 key, 최대 5개). 다루는 가게를 앞으로"""
+  brands: [String!]
+
   """any | low | mid | high"""
   budget: String
 
   """이 코스에서 이어 가기: 그 코스의 마지막 가게에서 새 출발점까지 대중교통 안내"""
   continueFrom: ID
 
+  """끝나는 곳. 비우면 마지막 가게에서 끝"""
+  end: EndInput
+
+  """이 시각까지 끝내기 ("18:00"). 주면 시간은 출발부터 여기까지"""
+  endBy: String
+
   """누구 옷: men(남성복) | women(여성복). 비우면 상관없음"""
   gender: String
 
-  """어떻게 요청했나 (통계용): buttons | here | point | text | photo | preset | again"""
+  """
+  어떻게 요청했나 (통계용): buttons | here | point | text | photo | preset | again | saved
+  """
   inputMode: String
 
   """찾는 품목 (catalog items)"""
@@ -212,12 +279,18 @@ input CourseRequestInput {
   """다녀온 가게는 넣지 않기 (내 가게 기록)"""
   skipVisited: Boolean
 
+  """출발 시각 (서울, "2026-10-17T14:00"). 비우면 지금. 그때 여는 가게로 짠다"""
+  startAt: String
+
   """2~20. 비우면 기본값"""
   stopCount: Int
   styles: [StyleWeightInput!]
 
   """30~720분. 비우면 기본값(개수를 정했으면 개수에 맞춤)"""
   timeBudgetMin: Int
+
+  """false면 날씨를 반영하지 않는다 (기본: 비·눈·더위·추위면 실내 위주, 덜 걷게)"""
+  weather: Boolean
 
   """코스 중간에 카페 들르기 (카카오 카페 검색)"""
   withCafe: Boolean
@@ -229,8 +302,14 @@ input CourseRequestInput {
 type CourseShop {
   category: String!
 
-  """사장님이 올린 오늘 영업시간 ("오늘 11:00–21:00"). 없으면 영업시간 확인 필요"""
+  """영업시간 출처: owner(사장님) | blog(블로그 글)"""
+  hoursSource: String
+
+  """코스 날의 영업시간 ("오늘 11:00–21:00", "토 쉬는 날"). 없으면 영업시간 확인 필요"""
   hoursToday: String
+
+  """도착할 때 닫혀 있으면 안내 ("도착(19:40) 때는 문을 닫아요")"""
+  hoursWarning: String
   id: ID!
   kind: String!
   lat: Float!
@@ -239,6 +318,9 @@ type CourseShop {
   littleKnown: Boolean!
   lng: Float!
   name: String!
+
+  """사장님 소식으로 진행 중인 것 ("세일 중", "신상 입고", "이벤트 중")"""
+  newsTag: String
   placeUrl: String
   priceRange: String
   roadAddress: String
@@ -249,6 +331,11 @@ type CourseShop {
 }
 
 type CourseStop {
+  """출발 시각을 골랐으면 도착 예정 시각 ("14:20")"""
+  arriveAt: String
+
+  """조건에서 고른 브랜드 중 이 가게가 다루는 것 (다시 짜도 브랜드마다 한 곳은 넣는다). 예전 코스는 없음"""
+  brands: [String!]
   legFromPrev: Leg!
   order: Int!
 
@@ -261,6 +348,12 @@ type CourseStop {
 type CourseVariant {
   """쉬어 가는 곳 (카페·맛집), 최대 종류별 하나"""
   breaks: [BreakStop!]
+
+  """마지막 가게 → 끝나는 곳 (정했을 때)"""
+  endLeg: Leg
+
+  """출발 시각을 골랐으면 끝나는 예정 시각 ("17:40")"""
+  finishAt: String
   label: String!
   note: String
   stops: [CourseStop!]!
@@ -270,10 +363,59 @@ type CourseVariant {
   walkMin: Float!
 }
 
+"""코스 시간대의 날씨 (Open-Meteo 예보)"""
+type CourseWeather {
+  """코스에 반영했나 (날씨가 나쁘고 반영을 끄지 않았을 때)"""
+  applied: Boolean!
+
+  """fine | rain | snow | hot | cold"""
+  condition: String!
+
+  """어떻게 반영했나 한 줄"""
+  note: String
+  rainChance: Int!
+
+  """
+  "비 70% · 18°"
+  """
+  summary: String!
+  tempC: Int!
+}
+
 """
 A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
 """
 scalar DateTime
+
+"""끝나는 곳: 지도·글에서 고른 점, 또는 출발점으로 돌아오기"""
+input EndInput {
+  """출발점으로 돌아오기"""
+  back: Boolean
+
+  """끝나는 장소 이름 (예: 합정역)"""
+  label: String
+  point: LatLngInput
+}
+
+"""같이 가는 사람 한 명의 취향"""
+type GroupMember {
+  """any | low | mid | high"""
+  budget: String!
+
+  """any | men | women"""
+  gender: String!
+  name: String!
+  styles: [String!]!
+}
+
+input GroupMemberInput {
+  budget: String
+  gender: String
+
+  """이름 (비우면 "친구 2" …)"""
+  name: String
+  styles: [String!]
+}
 
 type Health {
   """AI 제공자, 오늘 호출 수 (llm_calls 기준)"""
@@ -330,6 +472,14 @@ type Leg {
   path: [LatLng!]!
 }
 
+"""코스를 짠 지도 화면 영역 (지역을 고르지 않고 "지도 가운데서" 짰을 때)"""
+type MapArea {
+  neLat: Float!
+  neLng: Float!
+  swLat: Float!
+  swLng: Float!
+}
+
 type MapShop {
   """select_shop | vintage | brand | spa | general | complex"""
   category: String!
@@ -371,6 +521,9 @@ type Mutation {
   """내 후기 지우기"""
   deleteReview(shopId: ID!): Boolean!
 
+  """사장님: 소식 지우기"""
+  deleteShopNews(id: ID!): Boolean!
+
   """코스 한 버전을 고친다 (빼기, 다른 가게로, 옮기기, 더 넣기, 다시 짜기)"""
   editCourse(
     courseId: ID!
@@ -387,6 +540,9 @@ type Mutation {
   """내 가게 기록을 모두 지운다 (로그인 중이면 계정과 그 기록)"""
   forgetMe: Boolean!
 
+  """같이 가기에 내 취향 넣기: 모두의 취향을 섞어 같은 동네·시간·고정 가게로 다시 짠 코스"""
+  joinCourseGroup(id: ID!, member: GroupMemberInput!): Course!
+
   """관리자: 표본 판정 good | wrong_style | wrong_info | closed"""
   labelShop(note: String, shopId: ID!, verdict: String!): Boolean!
 
@@ -396,8 +552,25 @@ type Mutation {
   """자유롭게 쓴 글 → 요청서 초안 (AI)"""
   parsePrompt(text: String!): ParsedPrompt!
 
+  """코스 카드의 고정: 다른 코스·다시 짜기에도 이 가게를 넣는다 (최대 8곳)"""
+  pinCourseShop(courseId: ID!, on: Boolean!, shopId: ID!): PinResult!
+
   """요청서로 코스를 짠다 (추천 + 대안 최대 2개)"""
   planCourse(request: CourseRequestInput!): Course!
+
+  """사장님: 소식 올리기 (kind: new | sale | event | notice, 끝나는 날은 선택)"""
+  postShopNews(
+    body: String
+
+    """YYYY-MM-DD"""
+    endsOn: String
+    kind: String!
+    shopId: ID!
+    title: String!
+  ): ShopNews!
+
+  """걷기를 마친 코스 평가: rating 1 좋았어요 · 0 그저 그랬어요 · -1 별로였어요, note 한 줄 (300자)"""
+  rateCourse(courseId: ID!, note: String, rating: Int!): Boolean!
 
   """
   save | unsave | visit | unvisit | like | dislike | unrate | purchase | closed | view
@@ -433,6 +606,12 @@ type Mutation {
   """화면의 코스 버전을 고정 사본으로 저장하고 공유 링크용 id를 준다"""
   shareCourse(courseId: ID!, stopIds: [ID!], variant: Int!): ID!
 
+  """같이 가기 시작: 이 코스의 조건과 내 취향(코스의 스타일·누구 옷·예산)으로 링크를 만든다"""
+  startCourseGroup(courseId: ID!, name: String): CourseGroup!
+
+  """되돌리기: 이 버전의 마지막 고치기 전으로 (서버에도 저장, 새로고침해도 그대로)"""
+  undoCourseEdit(courseId: ID!, variant: Int!): CourseEditResult!
+
   """코스 저장 취소"""
   unsaveCourse(courseId: ID!): Boolean!
 
@@ -444,6 +623,9 @@ type Mutation {
 
   """사장님: 영업시간·소개·인스타그램·전화 고치기"""
   updateShopInfo(input: ShopInfoInput!, shopId: ID!): Boolean!
+
+  """걷기 모드 시작·끝 (통계용, 위치는 보내지 않음): action = start | finish"""
+  walkEvent(action: String!, arrived: Int, courseId: ID!, stops: Int): Boolean!
 }
 
 type MyClaim {
@@ -535,6 +717,9 @@ input OwnerClaimInput {
 
   """연락처 (전화 또는 이메일)"""
   contact: String!
+
+  """사업자등록증 사진 (JPEG base64, 필수). 관리자만 보고 승인·거절하면 지운다"""
+  documentBase64: String
   message: String
   ownerName: String!
 }
@@ -569,7 +754,16 @@ type OwnerInfo {
 
 """글을 읽고 만든 요청서 초안. 비어 있는 칸은 사용자가 말하지 않은 것"""
 type ParsedPrompt {
+  """글에 나온 브랜드 (브랜드 사전에서 찾은 것)"""
+  brands: [BrandRef!]!
   budget: String!
+
+  """말한 끝낼 시각 ("18:00")"""
+  endBy: String
+  endName: String
+
+  """말한 끝나는 장소의 좌표"""
+  endPoint: LatLng
 
   """any | men | women (남성복 / 여성복)"""
   gender: String!
@@ -587,6 +781,12 @@ type ParsedPrompt {
   point: LatLng
   regionId: ID
   regionName: String
+
+  """출발한 곳으로 돌아오기"""
+  roundTrip: Boolean!
+
+  """말한 출발 시각 ("2026-10-17T14:00", 서울)"""
+  startAt: String
   stopCount: Int
   styles: [StyleWeight!]!
 
@@ -606,6 +806,18 @@ type PhotoStyles {
   description: String!
   items: [String!]!
   styles: [StyleWeight!]!
+}
+
+type PinResult {
+  """고정을 바꾼 코스 (공유받은 코스면 새 사본)"""
+  courseId: ID!
+  mustShops: [PinnedShop!]!
+}
+
+"""고정한 가게: 꼭 넣을 가게로 고르거나 코스에 직접 넣은 곳. 다시 짜도 남는다"""
+type PinnedShop {
+  id: ID!
+  name: String!
 }
 
 """첫 화면의 "이런 코스 어때요" 카드 (pipeline.presets)"""
@@ -641,12 +853,21 @@ type QualityStat {
 }
 
 type Query {
+  """관리자: 데이터 건강 (JSON) — 데이터 작업이 살아 있나, 단계별 남은 일, 오늘 AI 사용량, 코스 평가"""
+  adminDataHealth: String!
+
   """관리자 통계 (JSON). ADMIN_KAKAO_IDS에 있는 카카오 계정으로 로그인해야 한다"""
   adminReport(days: Int! = 30): String!
+
+  """브랜드 이름으로 찾기 (한글·영문 어느 쪽이든). 다루는 가게가 있는 브랜드만"""
+  brandSearch(limit: Int! = 8, q: String!): [BrandRef!]!
   catalog: Catalog!
 
   """저장된 코스 (공유 링크, 지난 코스 다시 열기)"""
   course(id: ID!): Course
+
+  """같이 가기 (링크 ?g=)"""
+  courseGroup(id: ID!): CourseGroup!
 
   """각 구성 요소의 연결 상태"""
   health: Health!
@@ -668,6 +889,10 @@ type Query {
 
   """내가 쓴 후기"""
   myReviews: [MyReview!]!
+  mySavedGroups: [SavedGroup!]!
+
+  """찜한 가게들의 사장님 소식 (최신순)"""
+  mySavedNews(limit: Int! = 30): [ShopNews!]!
 
   """가게들에 대한 내 상태 (찜, 방문, 만족도). 기록이 없으면 빈 상태"""
   myShopStates(shopIds: [ID!]!): [MyShopState!]!
@@ -678,6 +903,9 @@ type Query {
 
   """내가 사장님인 가게"""
   ownedShops: [OwnedShop!]!
+
+  """관리자: 신청의 사업자등록증 사진 (data URL). 처리한 신청은 없음"""
+  ownerClaimDocument(id: ID!): String
 
   """관리자: 사장님 신청 목록"""
   ownerClaims(status: String! = "pending"): [AdminClaim!]!
@@ -712,6 +940,9 @@ type Query {
 
   """가게 상세 (소개, 찜·방문 수, 별점, 블로그 평판, 근거 글)"""
   shop(id: ID!): ShopDetail
+
+  """가게의 사장님 소식 (지금 보이는 것, 최신순)"""
+  shopNews(limit: Int! = 5, shopId: ID!): [ShopNews!]!
 
   """가게 후기, 최신순 10개씩 (내 후기는 shop.myReview)"""
   shopReviews(offset: Int! = 0, shopId: ID!): [Review!]!
@@ -758,19 +989,48 @@ type Region {
 
 """실제로 쓰인 요청서 (기본값 채운 뒤)"""
 type ResolvedRequest {
+  """이 지도 화면 안에서만 짰으면 그 영역 (다시 짤 때도 같은 영역)"""
+  bounds: MapArea
+
+  """찾은 브랜드"""
+  brands: [BrandRef!]!
   budget: String!
 
   """기본값으로 채운 칸 (칩을 흐리게 표시)"""
   defaultedFields: [String!]!
 
+  """이 시각까지 끝내기 ("18:00")"""
+  endBy: String
+
   """men | women (남성복 / 여성복), 없으면 상관없음"""
   gender: String
+
+  """같이 가기로 짠 코스면 그 같이 가기"""
+  groupId: ID
+
+  """같이 가는 사람 이름 (취향을 섞은 사람들)"""
+  groupNames: [String!]
+
+  """날씨 반영을 껐나"""
+  ignoreWeather: Boolean!
   items: [String!]!
   maxStops: Boolean!
+
+  """고정한 가게 (다른 코스·다시 짜기에도 넣는다)"""
+  mustShops: [PinnedShop!]!
 
   """지역을 골랐으면 그 지역 (같은 조건으로 다시 짤 때)"""
   regionId: ID
   regionName: String
+
+  """출발점으로 돌아오는 코스"""
+  roundTrip: Boolean
+
+  """다녀온 가게는 넣지 않기"""
+  skipVisited: Boolean!
+
+  """고른 출발 시각 ("2026-10-17T14:00"), 지금 출발이면 없음"""
+  startAt: String
   stopCount: Int!
   styles: [String!]!
 
@@ -807,6 +1067,8 @@ type Reviewer {
 
 """표본 확인용 가게 하나: AI가 쓴 소개·점수와 그 근거"""
 type SampleShop {
+  """다루는 브랜드 (pipeline.brands: 이름에서 / 글에서)"""
+  brands: [String!]!
   category: String!
   confidence: Float
 
@@ -826,6 +1088,28 @@ type SampleShop {
 type SampleStyle {
   score: Int!
   style: String!
+}
+
+"""찜한 가게 한 묶음 (같은 동네): 이 가게들로 코스를 짤 수 있다"""
+type SavedGroup {
+  """묶음 가운데 (지역 밖일 때 출발점)"""
+  center: LatLng!
+
+  """
+  지역 이름, 또는 지역 밖이면 "○○ 근처"
+  """
+  name: String!
+
+  """지역 안이면 그 지역 (지하철역에서 출발)"""
+  regionId: ID
+
+  """찜한 가게들 (최근에 찜한 순)"""
+  shops: [SavedGroupShop!]!
+}
+
+type SavedGroupShop {
+  id: ID!
+  name: String!
 }
 
 type ServiceStatus {
@@ -871,6 +1155,9 @@ type ShopDetail {
 
   """찜한 사람 수"""
   saves: Int!
+
+  """비슷한 가게 ("여기 좋았다면"): 소개·스타일이 비슷한 곳, 가까운 곳 조금 앞으로"""
+  similar(limit: Int! = 6): [SimilarShop!]!
   status: String!
 
   """5점 이상 스타일"""
@@ -905,6 +1192,25 @@ input ShopInfoInput {
   website: String
 }
 
+"""사장님 소식 한 건"""
+type ShopNews {
+  body: String
+  createdAt: DateTime!
+
+  """끝나는 날 (YYYY-MM-DD)"""
+  endsOn: String
+  id: ID!
+
+  """new | sale | event | notice"""
+  kind: String!
+
+  """"신상 입고", "세일" …"""
+  kindLabel: String!
+  shopId: ID!
+  shopName: String!
+  title: String!
+}
+
 """가게 사진 한 장 (검색 썸네일 + 출처)"""
 type ShopPhoto {
   """이 가게를 다룬 것으로 확인된 글의 사진"""
@@ -921,6 +1227,22 @@ type ShopsInBounds {
 
   """영역 안 전체 수 (limit 때문에 일부만 왔을 수 있음)"""
   total: Int!
+}
+
+"""비슷한 가게 한 곳 (가게 화면 "여기 좋았다면")"""
+type SimilarShop {
+  category: String!
+
+  """이 가게에서 떨어진 거리 (직선, m)"""
+  distanceM: Int!
+  id: ID!
+  kind: String!
+  lat: Float!
+  lng: Float!
+  name: String!
+
+  """왜 비슷한가 한 줄 ("빈티지·워크웨어 쪽이 비슷해요")"""
+  reason: String!
 }
 
 type SourcePost {

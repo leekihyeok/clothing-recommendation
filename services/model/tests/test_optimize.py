@@ -103,3 +103,65 @@ def test_must_shop_is_kept_even_if_far():
     res = optimize(OptimizeRequest(origin=LatLng(lat=37.5445, lng=127.056), candidates=near + [far], stop_count=4, time_budget_min=240))
     assert all("far" in c.stop_ids for c in res.courses)
     assert res.courses[0].value < 4  # reported value is the real one, not the bonus
+
+
+def test_end_point_pulls_the_course_towards_it():
+    # Shops on both sides of the start; finishing to the north should pick the northern ones and end near the end point.
+    north = [cand(i, 0.002 * i, 0.0, 0.5) for i in range(1, 4)]
+    south = [cand(10 + i, -0.002 * i, 0.0, 0.5) for i in range(1, 4)]
+    end = LatLng(lat=ORIGIN.lat + 0.008, lng=ORIGIN.lng)
+    res = optimize(OptimizeRequest(origin=ORIGIN, candidates=north + south, stop_count=3, time_budget_min=180, end=end))
+    best = res.courses[0]
+    assert set(best.stop_ids) == {"1", "2", "3"}
+    assert best.end_leg is not None
+    # The walk to the end point is part of the course's distance (legs are rounded one by one).
+    assert abs(best.total_distance_m - (sum(l.distance_m for l in best.legs) + best.end_leg.distance_m)) <= 2
+
+
+def test_end_leg_counts_against_the_time_budget():
+    # One shop next to the start, the end point a long walk away: without the end the shop fits easily, with it nothing fits.
+    shop = [cand(1, 0.0005, 0.0, 0.9)]
+    far_end = LatLng(lat=ORIGIN.lat + 0.03, lng=ORIGIN.lng)  # ~4.3 km by street ≈ 62 min
+    assert optimize(OptimizeRequest(origin=ORIGIN, candidates=shop, stop_count=1, time_budget_min=40)).courses[0].stop_ids == ["1"]
+    assert optimize(OptimizeRequest(origin=ORIGIN, candidates=shop, stop_count=1, time_budget_min=40, end=far_end)).courses[0].stop_ids == []
+
+
+def test_closed_shops_are_skipped_and_order_follows_opening():
+    # A: right next to the start but opens in 2 hours (too long to wait). B, C: open now.
+    a = cand(1, 0.0003, 0.0, 0.9).model_copy(update={"open_from": 120})
+    b = cand(2, 0.001, 0.0, 0.5)
+    c = cand(3, 0.002, 0.0, 0.5)
+    best = optimize(OptimizeRequest(origin=ORIGIN, candidates=[a, b, c], stop_count=3, time_budget_min=90)).courses[0]
+    assert "1" not in best.stop_ids
+
+    # D closes 30 minutes from now (about 6 min away, 15 min to browse): it has to come first even though E is nearer.
+    d = cand(4, 0.003, 0.0, 0.6).model_copy(update={"open_until": 30})
+    e = cand(5, 0.0008, 0.0, 0.6)
+    best = optimize(OptimizeRequest(origin=ORIGIN, candidates=[d, e], stop_count=2, time_budget_min=120, exact_count=True)).courses[0]
+    assert best.stop_ids == ["4", "5"]
+
+
+def test_short_wait_for_opening_is_allowed_and_counted():
+    # Opens 20 minutes after the start, 3 minutes' walk away: the course waits and the total time shows it.
+    shop = cand(1, 0.0015, 0.0, 0.9).model_copy(update={"open_from": 20})
+    best = optimize(OptimizeRequest(origin=ORIGIN, candidates=[shop], stop_count=1, time_budget_min=60)).courses[0]
+    assert best.stop_ids == ["1"]
+    assert best.total_min == 35.0  # waits until minute 20, then 15 minutes inside
+
+
+def test_rainy_nearby_course_is_not_empty():
+    # Low-value shops a few hundred metres apart: with rain (distance_scale 2.5) the "nearby" weighting makes every
+    # route's walk outweigh its shops, but a course is still better than none.
+    cands = [cand(i, 0.004 * i, 0.003 * i, 0.15) for i in range(1, 6)]
+    req = OptimizeRequest(origin=ORIGIN, candidates=cands, stop_count=3, time_budget_min=240, distance_scale=2.5)
+    courses = optimize(req).courses
+    assert courses and all(c.stop_ids for c in courses)
+
+
+def test_pinned_shop_waits_for_its_opening():
+    # A pinned shop next to the start that opens in 2 hours isn't the first stop of the walk.
+    late = Candidate(id="late", lat=ORIGIN.lat + 0.0005, lng=ORIGIN.lng, value=0.5, dwell_min=15, must=True, open_from=120, open_until=600)
+    others = [cand(i, 0.002 * i, 0.0, 0.6) for i in range(1, 6)]
+    req = OptimizeRequest(origin=ORIGIN, candidates=[late, *others], stop_count=4, time_budget_min=300, exact_count=True)
+    rec = optimize(req).courses[0]
+    assert "late" in rec.stop_ids and rec.stop_ids[0] != "late"

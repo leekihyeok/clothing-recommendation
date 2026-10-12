@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DbService } from './db.service';
 
-export type EventKind = 'plan' | 'parse_text' | 'parse_photo' | 'edit' | 'edit_text' | 'share' | 'share_open' | 'reopen' | 'login';
+export type EventKind = 'plan' | 'parse_text' | 'parse_photo' | 'edit' | 'edit_text' | 'share' | 'share_open' | 'reopen' | 'login' | 'walk';
 
 interface EventFields {
   userId?: string | null;

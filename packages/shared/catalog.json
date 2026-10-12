@@ -1,31 +1,31 @@
 {
   "version": 1,
   "styles": [
-    { "id": "vintage", "label": "빈티지" },
-    { "id": "secondhand", "label": "구제" },
-    { "id": "street", "label": "스트릿" },
-    { "id": "minimal", "label": "미니멀" },
-    { "id": "amekaji", "label": "아메카지" },
-    { "id": "gorpcore", "label": "고프코어" },
-    { "id": "y2k", "label": "Y2K" },
-    { "id": "designer", "label": "디자이너" },
-    { "id": "casual", "label": "캐주얼" },
-    { "id": "workwear", "label": "워크웨어" }
+    { "id": "vintage", "label": "빈티지", "labelEn": "Vintage" },
+    { "id": "secondhand", "label": "구제", "labelEn": "Thrift" },
+    { "id": "street", "label": "스트릿", "labelEn": "Street" },
+    { "id": "minimal", "label": "미니멀", "labelEn": "Minimal" },
+    { "id": "amekaji", "label": "아메카지", "labelEn": "Amekaji" },
+    { "id": "gorpcore", "label": "고프코어", "labelEn": "Gorpcore" },
+    { "id": "y2k", "label": "Y2K", "labelEn": "Y2K" },
+    { "id": "designer", "label": "디자이너", "labelEn": "Designer" },
+    { "id": "casual", "label": "캐주얼", "labelEn": "Casual" },
+    { "id": "workwear", "label": "워크웨어", "labelEn": "Workwear" }
   ],
   "items": [
-    { "id": "outer", "label": "아우터" },
-    { "id": "top", "label": "상의" },
-    { "id": "denim", "label": "데님" },
-    { "id": "bottom", "label": "하의" },
-    { "id": "shoes", "label": "신발" },
-    { "id": "bag", "label": "가방" },
-    { "id": "accessory", "label": "액세서리" }
+    { "id": "outer", "label": "아우터", "labelEn": "Outerwear" },
+    { "id": "top", "label": "상의", "labelEn": "Tops" },
+    { "id": "denim", "label": "데님", "labelEn": "Denim" },
+    { "id": "bottom", "label": "하의", "labelEn": "Bottoms" },
+    { "id": "shoes", "label": "신발", "labelEn": "Shoes" },
+    { "id": "bag", "label": "가방", "labelEn": "Bags" },
+    { "id": "accessory", "label": "액세서리", "labelEn": "Accessories" }
   ],
   "budgets": [
-    { "id": "any", "label": "상관없음" },
-    { "id": "low", "label": "저렴" },
-    { "id": "mid", "label": "중간" },
-    { "id": "high", "label": "고가" }
+    { "id": "any", "label": "상관없음", "labelEn": "Any" },
+    { "id": "low", "label": "저렴", "labelEn": "Budget" },
+    { "id": "mid", "label": "중간", "labelEn": "Mid-range" },
+    { "id": "high", "label": "고가", "labelEn": "High-end" }
   ],
   "stopCountOptions": [3, 4, 5, 6],
   "timeBudgetOptionsMin": [60, 120, 240],

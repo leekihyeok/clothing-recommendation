@@ -9,6 +9,8 @@ import { DISPLAY_NAME_SQL } from '../shops/shops.resolver';
 
 /** Where uploaded files live; main.ts serves this folder at /media. */
 export const UPLOAD_DIR = resolve(process.cwd(), process.env.UPLOAD_DIR ?? '../../data/uploads');
+// Files nobody but the admin sees (사업자등록증 photos of owner claims): not under UPLOAD_DIR, which /media serves.
+export const PRIVATE_DIR = resolve(process.cwd(), process.env.PRIVATE_DIR ?? '../../data/private');
 
 const MAX_AVATAR_BYTES = 400_000; // the page sends a 256 px JPEG, ~20-40 KB
 const NICKNAME_MIN = 2;
@@ -123,7 +125,10 @@ export class ProfileService {
       kakaoUnlinked = !!res?.ok;
       if (!kakaoUnlinked) this.log.warn(`kakao unlink failed for user ${userId}: ${res?.status ?? 'network'}`);
     }
+    // Their claims' certificate photos go with the account (the rows cascade, the files wouldn't).
+    const docs = await this.db.pool.query<{ doc_path: string }>('SELECT doc_path FROM shop_owner_claims WHERE user_id = $1 AND doc_path IS NOT NULL', [userId]);
     await this.db.pool.query('DELETE FROM users WHERE id = $1', [userId]); // cascades; courses.user_id → null
+    for (const d of docs.rows) await unlink(join(PRIVATE_DIR, d.doc_path)).catch(() => undefined);
     if (u.avatar_path) await unlink(join(UPLOAD_DIR, u.avatar_path)).catch(() => undefined);
     return { kakaoUnlinked };
   }

@@ -5,13 +5,20 @@ import { DbService } from '../infra/db.service';
 import { ModelClient } from '../infra/model.client';
 import { TransitService } from '../infra/transit.service';
 import { WalkService } from '../infra/walk.service';
+import { type CourseWeatherInfo, WeatherService } from '../infra/weather.service';
 import { MeService, type Personal } from '../me/me.service';
 import { CATEGORY_PRIOR, MIN_SIGNALS, tasteFit, tasteSummary } from '../me/taste';
-import { type HoursDay, openAt, seoulNow } from '../owners/owners.service';
+import type { HoursDay } from '../owners/owners.service';
 import { cleanName } from '../shops/names';
 import { searchShops } from '../shops/search';
+import { newsTags } from '../owners/news';
+import { lang } from '../infra/lang';
+import { inLang } from '../infra/translations';
+import { noteEn, reasonEn, tasteNoteEn, VARIANT_LABEL_EN, weatherEn } from './localize';
+import { BrandRef, brandsByKey } from '../shops/brands';
 import { DISPLAY_NAME_SQL } from '../shops/shops.resolver';
-import { BreakStop, Course, CourseEditInput, CourseEditResult, CourseLink, CourseRequestInput, CourseStop, CourseVariant } from './course.model';
+import { BreakStop, Course, CourseEditInput, CourseEditResult, CourseLink, CourseRequestInput, CourseStop, CourseVariant, CourseWeather, EndInput, Leg, PinnedShop } from './course.model';
+import { type Clock, clockAt, closedOnArrival, dayHours, hhmm, MAX_WAIT_MIN, minutesUntil, storedClock, windowFor } from './hours';
 
 const STYLE_LABEL = Object.fromEntries(STYLES.map((s) => [s.id, s.label]));
 const ITEM_LABEL = Object.fromEntries(ITEMS.map((i) => [i.id, i.label]));
@@ -130,7 +137,7 @@ function keepBreaks(v: CourseVariant, breaks: BreakStop[] | undefined): CourseVa
   return withBreaks(v, placed);
 }
 
-const INPUT_MODES = new Set(['buttons', 'here', 'point', 'text', 'photo', 'preset', 'again']);
+const INPUT_MODES = new Set(['buttons', 'here', 'point', 'text', 'photo', 'preset', 'again', 'saved', 'group']);
 const VARIANT_LABEL: Record<string, string> = { recommended: '추천', nearby: '가까운 위주', taste: '취향 우선' };
 const CATEGORY_LABEL: Record<string, string> = {
   select_shop: '편집숍', vintage: '빈티지·구제 숍', brand: '브랜드 매장', spa: 'SPA 매장', general: '옷가게', complex: '백화점·몰',
@@ -157,6 +164,37 @@ const STATION_RADIUS_M = 1200;
 interface Box { swLat: number; swLng: number; neLat: number; neLng: number }
 const usableBox = (b?: Box | null): Box | undefined =>
   b && b.neLat > b.swLat && b.neLng > b.swLng && b.neLat - b.swLat <= MAX_BOUNDS_DEG && b.neLng - b.swLng <= MAX_BOUNDS_DEG * 1.3 ? b : undefined;
+// Bad weather: indoor places (kind complex: 백화점·몰·지하상가) gain this much value, walking costs this many times more.
+const INDOOR_BONUS = 0.3;
+const BAD_WEATHER_WALK = 2.5;
+// …and one of them near the start is always in (within this walk of it) — if it fits the chosen styles this well.
+const INDOOR_MAX_M = 1000;
+const INDOOR_MIN_FIT = 0.5;
+const WEATHER_WHY: Record<string, string> = { rain: '비 소식이 있어서', snow: '눈 소식이 있어서', hot: '더운 날이라', cold: '추운 날이라' };
+
+function courseWeather(w: CourseWeatherInfo, applied: boolean, indoor: boolean): CourseWeather {
+  const why = WEATHER_WHY[w.condition];
+  const note = !applied || !why
+    ? undefined
+    : indoor
+      ? `${why} 백화점·몰 같은 실내를 한 곳 넣고, 가게 사이 걷는 길이 짧은 쪽으로 짰어요`
+      : `${why} 가게 사이 걷는 길이 짧은 쪽으로 짰어요 (고른 스타일에 맞는 실내 가게는 근처에 없어요)`;
+  return { condition: w.condition, summary: w.summary, rainChance: w.rainChance, tempC: w.tempC, applied, note };
+}
+
+type EndPoint = LatLngT & { name?: string; back?: boolean };
+// The client's placeholder names for a point picked on the map; the server looks up a real one.
+const GENERIC_PLACE = new Set(['', '고른 곳', '고른 위치', 'Picked spot']);
+const PICKED_STATION_M = 350;
+/** Where the walk finishes: back at the start, at a chosen place, or (undefined) at the last shop. */
+function resolveEnd(e: EndInput | undefined, origin: LatLngT, startName: string | undefined): EndPoint | undefined {
+  if (e?.back) return { lat: origin.lat, lng: origin.lng, name: startName ?? '출발점', back: true };
+  if (e?.point && Math.abs(e.point.lat - 37.55) < 0.5 && Math.abs(e.point.lng - 126.99) < 0.6) {
+    return { lat: e.point.lat, lng: e.point.lng, name: e.label?.trim().slice(0, 30) || '끝나는 곳' };
+  }
+  return undefined;
+}
+
 // Free stop count (the UI has a −/+ stepper and "as many as fit"). The optimiser handles up to 12 in about a second.
 export const MIN_STOPS = 2;
 // A whole day: 20 stops plan in about 1.5 s (services/model/app/optimize.py narrows its search past 12).
@@ -220,19 +258,37 @@ function onePerName(shops: Scored[], prefer: Set<string> = new Set()): Scored[] 
 }
 
 /**
+ * One store per brand: 아더에러 has several stores in 성수 alone, and a course of four of them (or two MLB stores)
+ * isn't a walk worth making. The best-valued store of each brand stays (or one already in the course); select shops
+ * carrying the brand aren't stores of it and stay too.
+ */
+function oneStorePerBrand(shops: Scored[], prefer: Set<string> = new Set()): Scored[] {
+  const best = new Map<string, Scored>();
+  const rest: Scored[] = [];
+  for (const s of shops) {
+    const key = s.category === 'brand' ? s.brand_keys?.[0] : undefined;
+    if (!key) {
+      rest.push(s);
+      continue;
+    }
+    const cur = best.get(key);
+    if (!cur || (prefer.has(s.id) && !prefer.has(cur.id)) || (!prefer.has(cur.id) && s.value > cur.value)) best.set(key, s);
+    else if (prefer.has(s.id)) rest.push(s); // a second store the user asked for by name stays
+  }
+  return [...rest, ...best.values()];
+}
+
+/**
  * Shortest open walk from the origin through all points (order only, the set is fixed). Up to 8 stops every order is
  * tried (8! = 40,320); longer courses start nearest-first and are improved with 2-opt.
  */
-export function shortestOrder(origin: LatLngT, pts: (LatLngT & { id: string })[]): string[] {
+export function shortestOrder(origin: LatLngT, pts: (LatLngT & { id: string })[], end?: LatLngT): string[] {
   const n = pts.length;
-  if (n <= 2) {
-    if (n === 2 && streetM(origin, pts[1]) + streetM(pts[1], pts[0]) < streetM(origin, pts[0]) + streetM(pts[0], pts[1])) {
-      return [pts[1].id, pts[0].id];
-    }
-    return pts.map((p) => p.id);
-  }
+  if (n <= 1) return pts.map((p) => p.id);
   const d = (a: LatLngT, b: LatLngT) => streetM(a, b);
-  const length = (order: number[]) => order.reduce((acc, k, i) => acc + d(i === 0 ? origin : pts[order[i - 1]], pts[k]), 0);
+  // With an end point (a station, back to the start) the walk there counts too.
+  const length = (order: number[]) =>
+    order.reduce((acc, k, i) => acc + d(i === 0 ? origin : pts[order[i - 1]], pts[k]), 0) + (end ? d(pts[order[order.length - 1]], end) : 0);
   let best: number[];
   if (n <= 8) {
     best = [...Array(n).keys()];
@@ -275,40 +331,38 @@ export function shortestOrder(origin: LatLngT, pts: (LatLngT & { id: string })[]
   return best.map((k) => pts[k].id);
 }
 
-/** Shops the user marked 별로였어요 or reported closed never come back; visited ones only when asked to skip them. */
 /**
- * A shop whose owner says it's closed now and still closed an hour from now isn't worth walking to. Courses start
- * now; shops without hours (most) stay, marked "영업시간 확인 필요" on their card.
+ * A shop is worth walking to only if it's open at some point the course could reach it (owner hours, else blog hours;
+ * shops without hours — still most — stay, marked "영업시간 확인 필요" on their card). The optimiser then fits the
+ * order to the hours.
  */
-function openSoon(r: Row): boolean {
-  if (!r.hours) return true;
-  const now = seoulNow();
-  const later = (now.minutes + 60) % 1440;
-  const laterDay = now.minutes + 60 >= 1440 ? (now.day + 1) % 7 : now.day;
-  return openAt(r.hours, now.day, now.minutes) !== false || openAt(r.hours, laterDay, later) !== false;
+function openDuring(r: Row, clock: Clock, budgetMin: number): boolean {
+  return windowFor(r.hours, clock, budgetMin) !== 'closed';
 }
 
-/** "오늘 11:00–21:00" / "오늘 쉬는 날" for a course card, from owner hours. */
-function hoursToday(hours: HoursDay[] | null): string | undefined {
-  const today = hours?.[seoulNow().day];
-  if (!today) return undefined;
-  return today.closed ? '오늘 쉬는 날' : today.open && today.close ? `오늘 ${today.open}–${today.close}` : undefined;
-}
+// Blog hours (pipeline.hours) older than this aren't trusted: shops change their hours.
+const BLOG_HOURS_MAX_AGE = "interval '3 years'";
 
-// One candidate row per shop, with its scores, sources and owner hours.
+// One candidate row per shop, with its scores, sources and hours (the owner's, else read from a recent blog post).
 const CANDIDATE_SELECT = `
       SELECT s.id::text, ${DISPLAY_NAME_SQL} AS name, s.kind, s.category, s.gender, ST_Y(s.geom::geometry) AS lat, ST_X(s.geom::geometry) AS lng,
              s.road_address, s.summary, s.reason_material, s.price_range, s.items, s.confidence, s.matched_posts, s.evidence_at,
              EXISTS (SELECT 1 FROM raw_sources r WHERE r.shop_id = s.id AND r.source = 'kakao') AS on_kakao,
-             (SELECT r.payload->>'place_url' FROM raw_sources r WHERE r.shop_id = s.id AND r.source = 'kakao' LIMIT 1) AS place_url,
+             -- a complex's Kakao link would open one store inside it, not the building
+             CASE WHEN s.kind = 'complex' THEN NULL
+                  ELSE (SELECT r.payload->>'place_url' FROM raw_sources r WHERE r.shop_id = s.id AND r.source = 'kakao' LIMIT 1) END AS place_url,
              (SELECT jsonb_object_agg(style_id, score) FROM shop_style_scores x WHERE x.shop_id = s.id) AS scores,
              (SELECT array_agg(DISTINCT r.category_name) FROM raw_sources r WHERE r.shop_id = s.id) AS source_categories,
-             (SELECT oi.hours FROM shop_owner_info oi WHERE oi.shop_id = s.id) AS hours
+             COALESCE(oh.hours, CASE WHEN s.hours_posted_on > now() - ${BLOG_HOURS_MAX_AGE} THEN s.hours END) AS hours,
+             CASE WHEN oh.hours IS NOT NULL THEN 'owner' WHEN s.hours_posted_on > now() - ${BLOG_HOURS_MAX_AGE} AND s.hours IS NOT NULL THEN 'blog' END AS hours_source,
+             (SELECT array_agg(b.brand_key) FROM shop_brands b WHERE b.shop_id = s.id) AS brand_keys
       FROM shops s
+      LEFT JOIN LATERAL (SELECT oi.hours FROM shop_owner_info oi WHERE oi.shop_id = s.id) oh ON true
       WHERE s.status = 'candidate' AND s.category IS NOT NULL AND s.category <> 'excluded'`;
 
-function keep(r: Row, personal: Personal | null, skipVisited: boolean): boolean {
-  if (!openSoon(r)) return false;
+/** Shops the user marked 별로였어요 or reported closed never come back; visited ones only when asked to skip them. */
+function keep(r: Row, personal: Personal | null, skipVisited: boolean, clock: Clock, budgetMin: number): boolean {
+  if (!openDuring(r, clock, budgetMin)) return false;
   if (!personal) return true;
   if (personal.disliked.has(r.id) || personal.closed.has(r.id)) return false;
   return !(skipVisited && personal.visited.has(r.id));
@@ -343,8 +397,11 @@ interface Row {
   place_url: string | null;
   scores: Record<string, number> | null;
   source_categories: string[] | null;
-  /** Owner-entered weekly hours (owners/), Mon..Sun; null for most shops. */
+  /** Weekly hours, Mon..Sun: the owner's (owners/), else read from a recent blog post (pipeline.hours); often null. */
   hours: HoursDay[] | null;
+  hours_source: 'owner' | 'blog' | null;
+  /** brands the shop carries (pipeline.brands) */
+  brand_keys: string[] | null;
 }
 
 interface Scored extends Row {
@@ -352,12 +409,15 @@ interface Scored extends Row {
   fit: Record<string, number>;
   /** A stop kept from the stored course (shop left the pool since): its stored reason line. */
   keptReason?: string;
+  /** Asked-for brands this shop carries ("아더에러 취급" on its card). */
+  brandHit?: string[];
 }
 
 interface ModelCourse {
   variant: string;
   stop_ids: string[];
   legs: { distance_m: number; duration_min: number }[];
+  end_leg?: { distance_m: number; duration_min: number } | null;
   total_distance_m: number;
   walk_min: number;
   total_min: number;
@@ -394,6 +454,19 @@ interface StoredRequest {
   skipVisited?: boolean;
   bounds?: Box;
   gender?: string;
+  /** chosen start ("2026-10-17T14:00", Seoul); none = planned for "now" */
+  startAt?: string;
+  endBy?: string;
+  /** where the walk ends, if not at the last shop */
+  end?: LatLngT & { name?: string; back?: boolean };
+  /** asked-for brands: keys and names */
+  brands?: BrandRef[];
+  /** pinned shops ("꼭 넣을 가게", or put in by hand on the course): in again whenever the course is planned anew */
+  mustShops?: PinnedShop[];
+  ignoreWeather?: boolean;
+  weather?: CourseWeather;
+  groupId?: string;
+  groupNames?: string[];
 }
 
 interface CourseRow {
@@ -417,9 +490,22 @@ function toCourse(r: CourseRow): Course {
       withCafe: q.withCafe,
       withFood: q.withFood,
       gender: q.gender,
+      startAt: q.startAt,
+      endBy: q.endBy,
+      roundTrip: q.end?.back || undefined,
+      brands: q.brands ?? [],
+      mustShops: q.mustShops ?? [],
+      skipVisited: q.skipVisited === true,
+      bounds: q.bounds,
+      ignoreWeather: q.ignoreWeather === true,
+      groupId: q.groupId,
+      groupNames: q.groupNames,
     },
+    weather: q.weather,
     origin: q.origin,
     startName: q.startName,
+    end: q.end ? { lat: q.end.lat, lng: q.end.lng } : undefined,
+    endName: q.end?.name,
     variants: r.result,
     shared: r.frozen,
     createdAt: r.created_at,
@@ -449,21 +535,73 @@ export class CourseService {
     private readonly config: ConfigService,
     private readonly walk: WalkService,
     private readonly transit: TransitService,
+    private readonly weather: WeatherService,
   ) {}
 
   /**
    * Swaps the straight-line legs for real walking routes (T map) where available and recomputes the totals.
    * Optimisation itself keeps using straight-line × 1.3; only the course shown gets the real streets.
    */
-  async withStreets(origin: LatLngT, v: CourseVariant): Promise<CourseVariant> {
+  async withStreets(origin: LatLngT, v: CourseVariant, end?: LatLngT): Promise<CourseVariant> {
     if (!this.walk.enabled || !v.stops.length) return v;
-    const legs = await this.walk.legs([origin, ...v.stops.map((s) => ({ lat: s.shop.lat, lng: s.shop.lng }))]);
+    const pts = [origin, ...v.stops.map((s) => ({ lat: s.shop.lat, lng: s.shop.lng })), ...(end ? [end] : [])];
+    const legs = await this.walk.legs(pts);
     if (legs.every((l) => !l)) return v;
     const stops = v.stops.map((s, i) => (legs[i] ? { ...s, legFromPrev: legs[i]! } : s));
-    const distance = stops.reduce((a, s) => a + s.legFromPrev.distanceM, 0);
-    const walkMin = Math.round(stops.reduce((a, s) => a + s.legFromPrev.durationMin, 0) * 10) / 10;
+    const endLeg: Leg | undefined = end ? legs[stops.length] ?? v.endLeg : undefined;
+    const all = [...stops.map((s) => s.legFromPrev), ...(endLeg ? [endLeg] : [])];
+    const distance = all.reduce((a, l) => a + l.distanceM, 0);
+    const walkMin = Math.round(all.reduce((a, l) => a + l.durationMin, 0) * 10) / 10;
     const dwell = stops.reduce((a, s) => a + dwellMin(s.shop.kind), 0);
-    return { ...v, stops, totalDistanceM: distance, walkMin, totalMin: Math.round((walkMin + dwell) * 10) / 10 };
+    return { ...v, stops, endLeg, totalDistanceM: distance, walkMin, totalMin: Math.round((walkMin + dwell) * 10) / 10 };
+  }
+
+  /** Hours per shop for course cards: the owner's, else a recent blog post's. */
+  private async hoursOf(ids: string[]): Promise<Map<string, { hours: HoursDay[] | null; source: 'owner' | 'blog' | null }>> {
+    if (!ids.length) return new Map();
+    const r = await this.db.pool.query<{ id: string; hours: HoursDay[] | null; source: 'owner' | 'blog' | null }>(
+      `SELECT s.id::text,
+              COALESCE(oh.hours, CASE WHEN s.hours_posted_on > now() - ${BLOG_HOURS_MAX_AGE} THEN s.hours END) AS hours,
+              CASE WHEN oh.hours IS NOT NULL THEN 'owner' WHEN s.hours_posted_on > now() - ${BLOG_HOURS_MAX_AGE} AND s.hours IS NOT NULL THEN 'blog' END AS source
+       FROM shops s LEFT JOIN LATERAL (SELECT oi.hours FROM shop_owner_info oi WHERE oi.shop_id = s.id) oh ON true
+       WHERE s.id = ANY($1::bigint[])`,
+      [ids.filter((id) => /^\d+$/.test(id))],
+    );
+    return new Map(r.rows.map((x) => [x.id, { hours: x.hours, source: x.source }]));
+  }
+
+  /**
+   * The course against the clock: each shop's hours on the course's day, a warning where the walk reaches it closed
+   * (after an edit, say — planning itself avoids that), arrival times when the user picked the start, and the total
+   * including any short wait for a shop to open (the same rules as the optimiser).
+   */
+  async timed(v: CourseVariant, clock: Clock, pre?: Prefetch): Promise<CourseVariant> {
+    const ids = v.stops.map((s) => s.shop.id);
+    const [hours, news] = pre ? [pre.hours, pre.news] : await Promise.all([this.hoursOf(ids), newsTags(this.db.pool, ids)]);
+    const today = clockAt();
+    let t = 0;
+    const stops = v.stops.map((s) => {
+      t += s.legFromPrev.durationMin;
+      const h = hours.get(s.shop.id);
+      const w = windowFor(h?.hours, clock, Infinity);
+      if (w && w !== 'closed' && t < w.from && w.from - t <= MAX_WAIT_MIN) t = w.from;
+      const arrive = t;
+      t += dwellMin(s.shop.kind);
+      for (const b of (v.breaks ?? []).filter((x) => x.afterOrder === s.order)) t += b.detourM / WALK_M_PER_MIN + b.minutes;
+      return {
+        ...s,
+        arriveAt: clock.chosen ? hhmm(clock.minutes + arrive) : undefined,
+        shop: {
+          ...s.shop,
+          hoursToday: dayHours(h?.hours, clock, today),
+          hoursSource: h?.source ?? undefined,
+          hoursWarning: closedOnArrival(h?.hours, clock, arrive),
+          newsTag: news.get(s.shop.id),
+        },
+      };
+    });
+    t += v.endLeg?.durationMin ?? 0;
+    return { ...v, stops, totalMin: Math.round(t * 10) / 10, finishAt: clock.chosen ? hhmm(clock.minutes + t) : undefined };
   }
 
   /** Nearest subway station per region (looked up once per process). */
@@ -471,6 +609,7 @@ export class CourseService {
 
   async plan(input: CourseRequestInput, userId: string | null = null): Promise<Course> {
     const t0 = Date.now();
+    input = coarseGps(input);
     const defaulted: string[] = [];
     const styles = (input.styles ?? []).filter((s) => STYLE_IDS.includes(s.id) && s.weight > 0);
     if (!input.styles?.length) defaulted.push('styles');
@@ -479,12 +618,16 @@ export class CourseService {
     if (maxStops) stopCount = MAX_STOPS;
     else if (input.stopCount != null) stopCount = Math.min(MAX_STOPS, Math.max(MIN_STOPS, Math.round(input.stopCount)));
     else stopCount = (defaulted.push('stopCount'), DEFAULTS.stopCount);
+    // When: now, or the start the user picked (shops are then checked against that day's hours).
+    const clock = clockAt(input.startAt);
+    const endBy = input.endBy?.trim() || undefined;
     // A stop count the user chose wins over the default time: plan all of them and let the time follow.
-    // Only a time the user chose themselves limits the count.
-    const timeChosen = input.timeBudgetMin != null && input.timeBudgetMin >= 30 && input.timeBudgetMin <= 720;
+    // Only a time the user chose themselves limits the count — a length, or "6시까지" (start → that time).
+    const timeChosen = endBy != null || (input.timeBudgetMin != null && input.timeBudgetMin >= 30 && input.timeBudgetMin <= 720);
     const countChosen = !maxStops && input.stopCount != null;
     let timeBudgetMin: number;
-    if (timeChosen) timeBudgetMin = Math.round(input.timeBudgetMin!);
+    if (endBy) timeBudgetMin = Math.min(NO_TIME_LIMIT_MIN, minutesUntil(clock, endBy));
+    else if (timeChosen) timeBudgetMin = Math.round(input.timeBudgetMin!);
     else {
       defaulted.push('timeBudgetMin');
       timeBudgetMin = countChosen ? NO_TIME_LIMIT_MIN : DEFAULTS.timeBudgetMin;
@@ -494,13 +637,22 @@ export class CourseService {
     const itemIds = new Set(ITEMS.map((i) => i.id));
     const items = (input.items ?? []).filter((i) => itemIds.has(i));
 
-    const resolved = await this.resolveOrigin(input);
+    // Brands asked for ("아더에러 파는 데"): shops carrying them move well up; their cards say so.
+    const brands = await brandsByKey(this.db.pool, [...new Set((input.brands ?? []).map((b) => b.trim()).filter(Boolean))].slice(0, 5));
+    const pickedStart = input.origin.point && !input.origin.regionId && !input.origin.gps && GENERIC_PLACE.has(input.origin.label?.trim() ?? '__');
+    const pickedName = pickedStart ? await this.nameOfPoint(input.origin.point!) : undefined;
+    const resolved = await this.resolveOrigin(pickedName ? { ...input, origin: { ...input.origin, label: pickedName } } : input);
     const { regionId, regionName } = resolved;
     let { origin, startName } = resolved;
+    // The forecast comes in while the shops are fetched and scored (a first ask for an area takes ~1 s).
+    const forecastAsk = this.weather.forCourse(origin, clock.date, clock.minutes, Math.min(timeBudgetMin, 300)).catch(() => null);
     const bounds = regionId ? undefined : usableBox(input.origin.bounds);
     const personal = userId ? await this.me.personal(userId) : null;
     const skipVisited = input.skipVisited === true;
-    const asked = [...new Set((input.mustShopIds ?? []).filter((id) => /^\d+$/.test(id)))].slice(0, Math.min(MAX_MUST, stopCount));
+    const asked = [...new Set((input.mustShopIds ?? []).filter((id) => /^\d+$/.test(id)))].slice(0, MAX_MUST);
+    // More pinned shops than stops asked for: the course grows to hold them all instead of dropping some silently.
+    const pinsNote = asked.length > stopCount ? `고정한 가게가 ${asked.length}곳이라 ${asked.length}곳으로 짰어요` : undefined;
+    if (asked.length > stopCount) stopCount = asked.length;
     const pool = await this.candidates(origin, regionId, stopCount, bounds);
     // A shop asked for by name may be just outside the area searched: it comes along if it is within reach.
     const missingMust = asked.filter((id) => !pool.some((r) => r.id === id));
@@ -512,24 +664,73 @@ export class CourseService {
     const mustIds = asked.filter((id) => pool.some((r) => r.id === id));
     const farNote = far.length ? `${topic(far.join('·'))} 출발점에서 멀어서 넣지 않았어요` : undefined;
     const gender = GENDERS.has(input.gender ?? '') ? input.gender : undefined;
-    const rows = pool.filter((r) => mustIds.includes(r.id) || (keep(r, personal, skipVisited) && genderFit(r, gender) > 0));
+    const rows = pool.filter((r) => mustIds.includes(r.id) || (keep(r, personal, skipVisited, clock, timeBudgetMin) && genderFit(r, gender) > 0));
     if (!rows.length) {
       throw new BadRequestException(
         bounds ? '지금 지도 화면 안에는 추천할 가게가 없어요. 지도를 옮기거나 조금 넓혀 주세요' : '이 근처에서 추천할 가게를 찾지 못했어요. 다른 지역을 골라 주세요',
       );
     }
+    // Shops known to be closed then are out (above); a pool emptied by the hours says so.
+    const closedThen = pool.filter((r) => !mustIds.includes(r.id) && windowFor(r.hours, clock, timeBudgetMin) === 'closed').length;
 
     // "같은 조건으로 다른 코스": shops the user was just shown drop back (not out, so small areas still fill a course).
     const seen = new Set((input.seenShopIds ?? []).slice(0, 200));
+    // Weather for the course's hours (origin, start, length): rain, snow, heat or cold → indoor places (백화점·몰·
+    // 지하상가) move up and every walk between shops counts more, so the course stays under a roof and short.
+    const ignoreWeather = input.weather === false;
+    const forecast = await forecastAsk;
+    const bad = !!forecast && forecast.condition !== 'fine';
+    const applyWeather = bad && !ignoreWeather;
+    // How well a shop fits the chosen styles (0-1); with none chosen, everything fits.
+    const styleFit = (s: Scored) => {
+      if (!styles.length) return 1;
+      const total = styles.reduce((a, x) => a + x.weight, 0);
+      return styles.reduce((a, x) => a + x.weight * ((s.fit[x.id] ?? 0) / 10), 0) / total;
+    };
     const fresh = rows.map((r) => {
-      const s = this.score(r, styles, budget, items, personal);
-      return mustIds.includes(r.id) ? s : { ...s, value: s.value * genderFit(r, gender) };
+      const s = this.score(r, styles, budget, items, personal, brands);
+      // Indoors counts for as much as it fits: a department store doesn't become a vintage stop because it rains.
+      const indoor = applyWeather && r.kind === 'complex' ? INDOOR_BONUS * styleFit(s) : 0;
+      return mustIds.includes(r.id) ? s : { ...s, value: Math.min(1, s.value * genderFit(r, gender) + indoor) };
     });
-    const kept = this.keyShops(input.keepShopIds ?? [], fresh, personal, mustIds.length ? stopCount - mustIds.length : stopCount);
-    const must = new Set([...mustIds, ...kept]);
+    // Each brand asked for is in every course like a pin: its best shop here (on "다른 코스", the best one not shown
+    // yet, so the brand stays but the shop can change). Pinned shops come first; a pinned shop carrying the brand counts.
+    const brandPicks: string[] = [];
+    const freshValue = (s: Scored) => (seen.has(s.id) ? s.value * SEEN_FACTOR : s.value);
+    for (const b of brands) {
+      if (mustIds.length + brandPicks.length >= stopCount) break;
+      const carries = (id: string) => fresh.find((f) => f.id === id)?.brand_keys?.includes(b.key);
+      if ([...mustIds, ...brandPicks].some(carries)) continue;
+      const best = fresh.filter((s) => s.brand_keys?.includes(b.key)).sort((x, y) => freshValue(y) - freshValue(x))[0];
+      if (best) brandPicks.push(best.id);
+    }
+    let indoorPicked = false;
+    // Bad weather: one indoor place near the start is in the course too (the best-valued complex within reach), so
+    // there's somewhere under a roof — unless a pinned shop already is one.
+    if (applyWeather && mustIds.length + brandPicks.length < stopCount && ![...mustIds, ...brandPicks].some((id) => fresh.find((f) => f.id === id)?.kind === 'complex')) {
+      const indoor = fresh
+        .filter((s) => s.kind === 'complex' && streetM(origin, s) <= INDOOR_MAX_M && styleFit(s) >= INDOOR_MIN_FIT)
+        .sort((x, y) => freshValue(y) - freshValue(x))[0];
+      if (indoor) brandPicks.push(indoor.id);
+      indoorPicked = !!indoor;
+    }
+    // A store of a brand already covered by its pick doesn't stay from the last course too (two 아더에러 stores).
+    const storeBrand = (id: string) => {
+      const f = fresh.find((x) => x.id === id);
+      return f?.category === 'brand' ? f.brand_keys?.[0] : undefined;
+    };
+    const picked = new Set(brandPicks.flatMap((id) => fresh.find((x) => x.id === id)?.brand_keys ?? []));
+    const kept = this.keyShops(
+      (input.keepShopIds ?? []).filter((id) => !brandPicks.includes(id) && !picked.has(storeBrand(id) ?? '')),
+      fresh, personal, stopCount - mustIds.length - brandPicks.length,
+    );
+    const must = new Set([...mustIds, ...brandPicks, ...kept]);
     const seenFactor = kept.length ? SEEN_FACTOR_KEEPING : SEEN_FACTOR;
-    const ranked = onePerName(
-      fresh.map((s) => (seen.has(s.id) && !must.has(s.id) ? { ...s, value: s.value * seenFactor } : s)),
+    const ranked = oneStorePerBrand(
+      onePerName(
+        fresh.map((s) => (seen.has(s.id) && !must.has(s.id) ? { ...s, value: s.value * seenFactor } : s)),
+        must,
+      ),
       must,
     ).sort((a, b) => b.value - a.value);
     const limit = Math.max(MAX_CANDIDATES, Math.min(80, Math.ceil(stopCount * 3.5)));
@@ -546,22 +747,35 @@ export class CourseService {
       if (station) ({ origin, startName } = { origin: { lat: station.lat, lng: station.lng }, startName: station.name });
     }
 
-    const res = await this.optimize(origin, scored, stopCount, timeBudgetMin, countChosen, must);
+    // Where it ends: the start again, a chosen place, or (default) the last shop.
+    // A finish picked on the map gets a real name ("합정역", "망원동") instead of "고른 곳".
+    const endInput = input.end?.point && GENERIC_PLACE.has(input.end.label?.trim() ?? '')
+      ? { ...input.end, label: (await this.nameOfPoint(input.end.point)) ?? input.end.label }
+      : input.end;
+    const end = resolveEnd(endInput, origin, startName);
+    const res = await this.optimize(origin, scored, stopCount, timeBudgetMin, countChosen, must, { clock, end, distanceScale: applyWeather ? BAD_WEATHER_WALK : 1 });
+    const weather = forecast ? courseWeather(forecast, applyWeather, indoorPicked) : undefined;
 
     const styleIds = styles.map((x) => x.id);
-    const variants: CourseVariant[] = res.map((c) => {
+    const hoursNote = clock.chosen && closedThen ? `${hhmm(clock.minutes)} 출발에 맞춰 그때 닫는 가게 ${closedThen}곳은 뺐어요` : undefined;
+    const unseenBrands = brands.filter((b) => !fresh.some((s) => s.brand_keys?.includes(b.key))).map((b) => b.name);
+    const brandNote = unseenBrands.length ? `이 근처에서 ${obj(unseenBrands.join('·'))} 다루는 가게를 찾지 못했어요` : undefined;
+    const filled = res.filter((c) => c.stop_ids.length);
+    const variants: CourseVariant[] = (filled.length ? filled : res.slice(0, 1)).map((c) => {
       const stops = this.stops(origin, c.stop_ids.map((id) => byId.get(id)!), styleIds, c.legs);
+      const last = stops[stops.length - 1]?.shop ?? origin;
       return {
         variant: c.variant, label: VARIANT_LABEL[c.variant] ?? c.variant, stops,
         totalDistanceM: c.total_distance_m, walkMin: c.walk_min, totalMin: c.total_min,
+        endLeg: end && c.end_leg ? { distanceM: c.end_leg.distance_m, durationMin: c.end_leg.duration_min, path: [{ lat: last.lat, lng: last.lng }, end] } : undefined,
         // "as many as fit" asked for the maximum on purpose, so fewer stops is the answer, not a warning.
-        note: [maxStops ? `시간 안에 ${stops.length}곳을 넣었어요` : c.note, this.mustNote(c.stop_ids, mustIds, kept, byId), farNote].filter(Boolean).join(' · ') || undefined,
+        note: [maxStops ? `시간 안에 ${stops.length}곳을 넣었어요` : c.note, pinsNote, this.mustNote(c.stop_ids, mustIds, kept, byId), farNote, hoursNote, brandNote].filter(Boolean).join(' · ') || undefined,
       };
     });
 
     const routed = await Promise.all(
       variants.map(async (v) => {
-        const streets = await this.withStreets(origin, v);
+        const streets = await this.withStreets(origin, v, end);
         if (!input.withCafe && !input.withFood) return streets;
         const n = streets.stops.length;
         const kinds: BreakKind[] = [...(input.withFood ? (['food'] as const) : []), ...(input.withCafe ? (['cafe'] as const) : [])];
@@ -570,10 +784,10 @@ export class CourseService {
         const cafe = input.withCafe ? await this.findBreak(streets, 'cafe', slots.cafe!, food?.afterOrder ?? 1) : undefined;
         const missing = [input.withFood && !food ? '맛집' : '', input.withCafe && !cafe ? '카페' : ''].filter(Boolean);
         const withStops = withBreaks(streets, [food, cafe].filter((b): b is BreakStop => !!b));
-        return missing.length ? { ...withStops, note: [withStops.note, `코스 가까이에서 들를 ${missing.join('·')}을 찾지 못했어요`].filter(Boolean).join(' · ') } : withStops;
+        return missing.length ? { ...withStops, note: [withStops.note, `코스 가까이에서 들를 ${object(missing.join('·'))} 찾지 못했어요`].filter(Boolean).join(' · ') } : withStops;
       }),
     );
-    variants.splice(0, variants.length, ...routed);
+    variants.splice(0, variants.length, ...(await Promise.all(routed.map((v) => this.timed(v, clock)))));
 
     const request = {
       withCafe: input.withCafe === true || undefined,
@@ -581,17 +795,28 @@ export class CourseService {
       gender,
       styles: styleIds, stopCount, maxStops, timeBudgetMin, budget, items, regionName, regionId, defaultedFields: defaulted,
       tasteNote: this.tasteNote(personal, styleIds.length > 0),
+      startAt: clock.chosen ? input.startAt!.trim() : undefined,
+      endBy,
+      roundTrip: end?.back || undefined,
+      brands,
+      mustShops: mustIds.map((id) => ({ id, name: byId.get(id)?.name ?? pool.find((r) => r.id === id)?.name ?? '' })),
+      skipVisited,
+      bounds,
+      ignoreWeather,
     };
     // "다른 지역으로 이어 가기": how to get from the previous course's last shop to this one's start.
     const link = input.continueFrom ? await this.linkFrom(input.continueFrom, origin, startName) : undefined;
     const saved = await this.db.pool.query<{ id: string }>(
       `INSERT INTO courses (request, result, user_id, input_mode, plan_ms) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
       [
-        JSON.stringify({ ...request, origin, skipVisited, startName, bounds, link }), JSON.stringify(variants), userId,
+        JSON.stringify({ ...request, origin, startName, link, end, weather }), JSON.stringify(variants), userId,
         INPUT_MODES.has(input.inputMode ?? '') ? input.inputMode : 'buttons', Date.now() - t0,
       ],
     );
-    return { id: saved.rows[0].id, request, origin, startName, variants, shared: false, createdAt: new Date(), link };
+    return {
+      id: saved.rows[0].id, request, origin, startName, variants, shared: false, createdAt: new Date(), link,
+      end: end ? { lat: end.lat, lng: end.lng } : undefined, endName: end?.name, weather,
+    };
   }
 
   /** The previous course's last shop → this course's start, by public transit (or the Kakao Map link). */
@@ -690,13 +915,14 @@ export class CourseService {
     const ctx = await this.editContext(await this.editable(courseId, userId), variantIndex, stopIds);
     const stored = ctx.result[variantIndex];
     const sameStops = ctx.ids.join() === stored.stops.map((s) => s.shop.id).join();
-    const base = sameStops ? withoutBreaks(stored) : await this.withStreets(ctx.req.origin, ctx.current);
+    const base = sameStops ? withoutBreaks(stored) : await this.withStreets(ctx.req.origin, ctx.current, ctx.req.end);
+    const clock = storedClock(ctx.req.startAt);
     const current = (stored.breaks ?? []).find((b) => b.kind === kind);
     const others = (stored.breaks ?? []).filter((b) => b.kind !== kind).map((b) => ({ ...b, afterOrder: bestSlot(base, b) }));
     // Asking again while one is in: another place, never the one shown now or any turned down before.
     const skip = new Set([...avoid, ...(on && current ? [current.name] : [])].slice(0, 50));
     const list = [...others];
-    let message = `${BREAKS[kind].label}를 뺐어요`;
+    let message = `${object(BREAKS[kind].label)} 뺐어요`;
     if (on) {
       const n = base.stops.length;
       const other = others[0];
@@ -708,14 +934,169 @@ export class CourseService {
         // Nothing else on the way: keep the one there was rather than dropping it.
         const kept = current ? [...list, { ...current, afterOrder: bestSlot(base, current) }] : list;
         const what = current ? `다른 ${BREAKS[kind].label}` : `들를 ${BREAKS[kind].label}`;
-        return { courseId: ctx.courseId, variant: withBreaks(base, kept), message: `코스 가까이에서 ${what}을 찾지 못했어요` };
+        return { courseId: ctx.courseId, variant: await this.timed(withBreaks(base, kept), clock), message: `코스 가까이에서 ${object(what)} 찾지 못했어요`, mustShops: ctx.req.mustShops ?? [] };
       }
       list.push(found);
       message = current ? `${current.name} 대신 ${toward(found.name)} 바꿨어요` : `${found.afterOrder}번 다음, 가는 길에 있는 ${object(found.name)} 넣었어요`;
     }
-    const variant = withBreaks(base, list);
+    const variant = await this.timed(withBreaks(base, list), clock);
     await this.saveEdit(ctx, variant, [{ op: 'break', kind, on, source: 'button' }]);
-    return { courseId: ctx.courseId, variant, message };
+    return { courseId: ctx.courseId, variant, message, mustShops: ctx.req.mustShops ?? [] };
+  }
+
+  /**
+   * 같이 가기: the base course's own conditions (area, time, end, pins, brands, count …) with everyone's taste instead
+   * of the first person's. Returns the request to plan and the names for the course header.
+   */
+  async groupRequest(
+    baseId: string, taste: { styles: { id: string; weight: number }[]; gender?: string; budget?: string }, names: string[],
+  ): Promise<{ input: CourseRequestInput; names: string[] }> {
+    const row = (await this.db.pool.query<CourseRow>('SELECT id, request, result, frozen, created_at FROM courses WHERE id = $1', [baseId])).rows[0];
+    if (!row) throw new BadRequestException('처음 코스를 찾지 못했어요');
+    const q = row.request;
+    const chosen = (f: string) => !(q.defaultedFields ?? []).includes(f);
+    const startAt = q.startAt && storedClock(q.startAt).chosen ? q.startAt : undefined;
+    const input: CourseRequestInput = {
+      origin: q.regionId ? { regionId: q.regionId } : { point: q.origin, label: q.startName, bounds: q.bounds },
+      styles: taste.styles,
+      stopCount: !q.maxStops && chosen('stopCount') ? q.stopCount : undefined,
+      maxStops: q.maxStops || undefined,
+      timeBudgetMin: chosen('timeBudgetMin') && !q.endBy ? q.timeBudgetMin : undefined,
+      budget: taste.budget,
+      items: q.items?.length ? q.items : undefined,
+      withCafe: q.withCafe,
+      withFood: q.withFood,
+      gender: taste.gender,
+      startAt,
+      endBy: q.endBy && endStillAhead(startAt, q.endBy) ? q.endBy : undefined,
+      end: q.end?.back ? { back: true } : q.end ? { point: { lat: q.end.lat, lng: q.end.lng }, label: q.end.name } : undefined,
+      mustShopIds: (q.mustShops ?? []).map((m) => m.id),
+      brands: (q.brands ?? []).map((b) => b.key),
+      weather: q.ignoreWeather ? false : undefined,
+      inputMode: 'group',
+    };
+    return { input, names };
+  }
+
+  /** Marks a course as planned for a group (the header says whose tastes went in). */
+  async markGroup(courseId: string, groupId: string, names: string[]): Promise<void> {
+    await this.db.pool.query(
+      `UPDATE courses SET request = request || jsonb_build_object('groupId', $2::text, 'groupNames', $3::jsonb) WHERE id = $1`,
+      [courseId, groupId, JSON.stringify(names)],
+    );
+  }
+
+  // ---------- English (the client's English mode) ----------
+
+  /**
+   * A course in the request's language. Stored courses keep their Korean text; for English this rewrites it on the
+   * way out: each card's reason from the shop's translated summary (pipeline.translate), hours / warnings / news tags
+   * recomputed (they're written in the request's language), notes and labels through localize.ts.
+   */
+  /**
+   * Many courses in the request's language (저장한 코스, 최근 코스) with a handful of queries for all of them, not about
+   * fourteen per course: shops, hours, news, translations and brand names are fetched once up front.
+   */
+  async localizeMany(courses: Course[]): Promise<Course[]> {
+    if (lang() !== 'en' || !courses.length) return courses;
+    const ids = [...new Set(courses.flatMap((c) => c.variants.flatMap((v) => v.stops.map((s) => s.shop.id))))];
+    const [rows, hours, news] = await Promise.all([this.shopTexts(ids), this.hoursOf(ids), newsTags(this.db.pool, ids)]);
+    // Warms inLang's cache, so each course's own lookups below need no query.
+    await inLang(this.db.pool, [
+      ...courses.flatMap((c) => [c.request.regionName, c.startName, c.endName].map((x) => x?.replace(/ 근처$/, ''))),
+      ...[...rows.values()].flatMap((r) => [r.reason_material, r.summary]),
+    ]);
+    const brandsEn = await this.brandNamesEn(courses.flatMap((c) => [...c.request.brands.map((b) => b.name), ...c.variants.flatMap((v) => v.stops.flatMap((s) => s.brands ?? []))]));
+    const pre: Prefetch = { rows, hours, news, brandsEn };
+    return Promise.all(courses.map((c) => this.localize(c, pre)));
+  }
+
+  /** The shop texts a card's English is made from. */
+  private async shopTexts(ids: string[]): Promise<Map<string, ShopText>> {
+    const want = ids.filter((id) => /^\d+$/.test(id));
+    if (!want.length) return new Map();
+    const r = await this.db.pool.query<ShopText>(
+      `SELECT s.id::text, s.category, s.summary, s.reason_material,
+              (SELECT jsonb_object_agg(style_id, score) FROM shop_style_scores x WHERE x.shop_id = s.id) AS scores
+       FROM shops s WHERE s.id = ANY($1::bigint[])`,
+      [want],
+    );
+    return new Map(r.rows.map((x) => [x.id, x]));
+  }
+
+  async localize(c: Course, pre?: Prefetch): Promise<Course> {
+    if (lang() !== 'en') return c;
+    const q = c.request;
+    const tr = await inLang(this.db.pool, [q.regionName, c.startName, c.endName].map((x) => x?.replace(/ 근처$/, '')));
+    const place = (name?: string) => {
+      if (!name) return name;
+      const near = / 근처$/.test(name);
+      const base = name.replace(/ 근처$/, '');
+      const en = tr.get(base) ?? ({ '내 위치': 'My location', '고른 위치': 'Picked spot', '출발점': 'the start', '끝나는 곳': 'Finish', '고른 곳': 'Picked spot' } as Record<string, string>)[base] ?? base;
+      return near ? `Near ${en}` : en;
+    };
+    const brandsEn = pre?.brandsEn ?? (await this.brandNamesEn([...q.brands.map((b) => b.name), ...c.variants.flatMap((v) => v.stops.flatMap((s) => s.brands ?? []))]));
+    return {
+      ...c,
+      startName: place(c.startName),
+      endName: place(c.endName),
+      weather: weatherEn(c.weather),
+      request: {
+        ...q,
+        regionName: place(q.regionName),
+        tasteNote: tasteNoteEn(q.tasteNote),
+        brands: q.brands.map((b) => ({ ...b, name: b.nameEn ?? brandsEn.get(b.name) ?? b.name })),
+      },
+      variants: await Promise.all(c.variants.map((v) => this.localizeVariant(v, q.styles, q.startAt, brandsEn, pre))),
+    };
+  }
+
+  /** One version of a course in the request's language (see localize). */
+  async localizeVariant(v: CourseVariant, styleIds: string[], startAt?: string, brandsEn?: Map<string, string>, pre?: Prefetch): Promise<CourseVariant> {
+    if (lang() !== 'en') return v;
+    const byId = pre?.rows ?? (await this.shopTexts(v.stops.map((s) => s.shop.id)));
+    const rows = v.stops.map((s) => byId.get(s.shop.id)).filter((r): r is ShopText => !!r);
+    const tr = await inLang(this.db.pool, rows.flatMap((r) => [r.reason_material, r.summary]));
+    const brands = brandsEn ?? (await this.brandNamesEn(v.stops.flatMap((s) => s.brands ?? [])));
+    const timed = await this.timed(v, storedClock(startAt), pre);
+    return {
+      ...timed,
+      label: VARIANT_LABEL_EN[v.variant] ?? v.label,
+      // Brand names inside the note too ("…carries 아더에러" → ADER ERROR).
+      note: [...brands].reduce<string | undefined>((n, [ko, en]) => n?.split(ko).join(en), noteEn(v.note)),
+      stops: timed.stops.map((s) => {
+        const r = byId.get(s.shop.id);
+        if (!r) return s;
+        const best = styleIds
+          .map((id) => ({ id, score: r.scores?.[id] ?? 0 }))
+          .filter((x) => x.score >= 5)
+          .sort((a, b) => b.score - a.score)[0];
+        const label = best ? (STYLES.find((x) => x.id === best.id)?.labelEn ?? best.id) : undefined;
+        const text = (r.reason_material && tr.get(r.reason_material)) || (r.summary && tr.get(r.summary)) || undefined;
+        const stopBrands = (s.brands ?? []).map((b) => brands.get(b) ?? b);
+        return {
+          ...s,
+          brands: stopBrands,
+          reason: reasonEn({ brands: stopBrands, style: best && label ? { label, score: best.score } : undefined, text, category: r.category }),
+          shop: { ...s.shop, summary: (r.summary && tr.get(r.summary)) || s.shop.summary },
+        };
+      }),
+    };
+  }
+
+  /** English spellings of brand names (the brand dictionary's name_en). */
+  private async brandNamesEn(names: string[]): Promise<Map<string, string>> {
+    const want = [...new Set(names.filter(Boolean))];
+    if (!want.length || lang() !== 'en') return new Map();
+    const r = await this.db.pool.query<{ name: string; name_en: string }>('SELECT name, name_en FROM brands WHERE name = ANY($1) AND name_en IS NOT NULL', [want]);
+    return new Map(r.rows.map((x) => [x.name, x.name_en]));
+  }
+
+  /** An edit's result in the request's language. */
+  async localizeEdit(r: CourseEditResult): Promise<CourseEditResult> {
+    if (lang() !== 'en') return r;
+    const row = (await this.db.pool.query<{ request: StoredRequest }>('SELECT request FROM courses WHERE id = $1', [r.courseId])).rows[0];
+    return { ...r, message: noteEn(r.message), variant: await this.localizeVariant(r.variant, row?.request.styles ?? [], row?.request.startAt) };
   }
 
   /** Public transit between two points (getting to a course's start). */
@@ -729,9 +1110,46 @@ export class CourseService {
   async edit(courseId: string, variantIndex: number, edit: CourseEditInput, stopIds?: string[], userId: string | null = null): Promise<CourseEditResult> {
     const ctx = await this.editContext(await this.editable(courseId, userId), variantIndex, stopIds);
     const { ids, message } = await this.applyEdit(ctx, ctx.ids, edit);
-    const variant = keepBreaks(await this.withStreets(ctx.req.origin, this.rebuild(ctx, ids)), ctx.result[ctx.variantIndex].breaks);
+    const variant = await this.timed(
+      keepBreaks(await this.withStreets(ctx.req.origin, this.rebuild(ctx, ids), ctx.req.end), ctx.result[ctx.variantIndex].breaks),
+      storedClock(ctx.req.startAt),
+    );
     await this.saveEdit(ctx, variant, [{ ...edit, source: 'button' }]);
-    return { courseId: ctx.courseId, variant, message };
+    const mustShops = await this.savePins(ctx, ids, edit.shopId && (edit.op === 'add' || edit.op === 'replace') ? [edit.shopId] : []);
+    return { courseId: ctx.courseId, variant, message, mustShops };
+  }
+
+  /**
+   * Pins after an edit: a pinned shop taken out of the course by hand is unpinned; a shop the user put in by hand
+   * (by name, from the map) is pinned, so "다른 코스" keeps it. At most MAX_MUST.
+   */
+  private async savePins(ctx: EditContext, ids: string[], added: string[]): Promise<PinnedShop[]> {
+    const before = ctx.req.mustShops ?? [];
+    const kept = before.filter((m) => ids.includes(m.id));
+    const fresh = added.filter((id) => ids.includes(id) && !kept.some((m) => m.id === id)).map((id) => ({ id, name: this.nameOf(ctx, id) }));
+    const pins = [...kept, ...fresh].slice(0, MAX_MUST);
+    if (JSON.stringify(pins) !== JSON.stringify(before)) await this.writePins(ctx.courseId, pins);
+    return pins;
+  }
+
+  private async writePins(courseId: string, pins: PinnedShop[]): Promise<void> {
+    await this.db.pool.query(`UPDATE courses SET request = jsonb_set(request, '{mustShops}', $2::jsonb) WHERE id = $1`, [courseId, JSON.stringify(pins)]);
+  }
+
+  /** The card's pin: keep this shop in whatever course comes next ("다른 코스", 누구 옷, 시간 제한 없이). */
+  async pin(courseId: string, shopId: string, on: boolean, userId: string | null): Promise<{ courseId: string; mustShops: PinnedShop[] }> {
+    const own = await this.editable(courseId, userId);
+    const row = (await this.db.pool.query<{ request: StoredRequest; result: CourseVariant[] }>('SELECT request, result FROM courses WHERE id = $1', [own])).rows[0];
+    if (!row) throw new BadRequestException('코스를 찾지 못했어요');
+    const pins = (row.request.mustShops ?? []).filter((m) => m.id !== shopId);
+    if (on) {
+      if (pins.length >= MAX_MUST) throw new BadRequestException(`고정은 ${MAX_MUST}곳까지예요. 다른 가게의 고정을 풀어 주세요`);
+      const stop = row.result.flatMap((v) => v.stops).find((s) => s.shop.id === shopId);
+      if (!stop) throw new BadRequestException('코스에 있는 가게만 고정할 수 있어요');
+      pins.push({ id: shopId, name: stop.shop.name });
+    }
+    await this.writePins(own, pins);
+    return { courseId: own, mustShops: pins };
   }
 
   /**
@@ -747,13 +1165,16 @@ export class CourseService {
       '/edit-intent',
       {
         text: trimmed.slice(0, 300),
+        lang: lang(),
         stops: ctx.current.stops.map((st) => ({
           order: st.order, name: st.shop.name, category: st.shop.category, summary: st.shop.summary ?? null, price_range: st.shop.priceRange ?? null,
         })),
       },
       30000,
     );
-    if (!intent.ops.length) return { courseId, variant: ctx.current, message: intent.reply || '어떻게 고칠지 잘 모르겠어요. 다르게 말해 주세요' };
+    if (!intent.ops.length) {
+      return { courseId, variant: ctx.current, message: intent.reply || '어떻게 고칠지 잘 모르겠어요. 다르게 말해 주세요', mustShops: ctx.req.mustShops ?? [] };
+    }
     const own = await this.editable(courseId, userId);
     if (own !== courseId) ctx = { ...ctx, courseId: own };
 
@@ -761,6 +1182,8 @@ export class CourseService {
     const pinned = intent.ops.map((o) => ({ op: o, shopId: o.order ? original[o.order - 1] : undefined }));
     let ids = [...original];
     const done: string[] = [];
+    // Shops named in the sentence ("팔라스 넣어줘") count as put in by hand: pinned.
+    const byName: string[] = [];
     for (const { op, shopId } of pinned) {
       if (op.order && !shopId) continue; // a number that isn't in the course
       const order = shopId ? ids.indexOf(shopId) + 1 : undefined;
@@ -778,6 +1201,7 @@ export class CourseService {
           continue;
         }
         pickedId = hit.id;
+        byName.push(hit.id);
         // The only shop of that name may be in another neighbourhood: say so, the walk gets long.
         if ((hit.distanceM ?? 0) > FAR_PICK_M) farNote = ` (코스에서 ${((hit.distanceM ?? 0) / 1000).toFixed(1)}km 떨어진 곳이라 걷는 길이 길어져요)`;
       }
@@ -794,9 +1218,13 @@ export class CourseService {
         done.push(e instanceof Error ? e.message : String(e));
       }
     }
-    const variant = keepBreaks(await this.withStreets(ctx.req.origin, this.rebuild(ctx, ids)), ctx.result[ctx.variantIndex].breaks);
+    const variant = await this.timed(
+      keepBreaks(await this.withStreets(ctx.req.origin, this.rebuild(ctx, ids), ctx.req.end), ctx.result[ctx.variantIndex].breaks),
+      storedClock(ctx.req.startAt),
+    );
     await this.saveEdit(ctx, variant, [{ op: 'text', text: trimmed, ops: intent.ops, source: 'assistant' }]);
-    return { courseId: ctx.courseId, variant, message: done.join(' · ') || intent.reply };
+    const mustShops = await this.savePins(ctx, ids, byName);
+    return { courseId: ctx.courseId, variant, message: done.join(' · ') || intent.reply, mustShops };
   }
 
   // ---------- sharing and history (stage 7) ----------
@@ -811,7 +1239,12 @@ export class CourseService {
     if (frozen.frozen) return courseId; // passing on a link that was shared with me
     const ctx = await this.editContext(courseId, variantIndex, stopIds);
     const stored = ctx.result[variantIndex].stops.map((st) => st.shop.id);
-    const shown = ctx.ids.join() === stored.join() ? ctx.current : keepBreaks(await this.withStreets(ctx.req.origin, ctx.current), ctx.result[variantIndex].breaks);
+    const shown = ctx.ids.join() === stored.join()
+      ? ctx.current
+      : await this.timed(
+          keepBreaks(await this.withStreets(ctx.req.origin, ctx.current, ctx.req.end), ctx.result[variantIndex].breaks),
+          storedClock(ctx.req.startAt),
+        );
     const result = JSON.stringify([shown, ...ctx.result.filter((_, i) => i !== variantIndex)]);
     const same = await this.db.pool.query<{ id: string }>(
       'SELECT id FROM courses WHERE shared_from = $1 AND frozen AND result = $2::jsonb LIMIT 1',
@@ -869,8 +1302,6 @@ export class CourseService {
       const exists = await this.db.pool.query('SELECT 1 FROM courses WHERE id = $1', [own]);
       if (!exists.rowCount) throw new BadRequestException('코스를 찾지 못했어요');
     }
-    // A course made before logging in (or by this browser) becomes the account's.
-    await this.db.pool.query('UPDATE courses SET user_id = $1 WHERE id = $2 AND user_id IS NULL', [userId, own]);
     return own;
   }
 
@@ -896,13 +1327,14 @@ export class CourseService {
 
   /**
    * The course id an edit should write to. A shared (frozen) course, or someone else's course opened from its address
-   * (the page keeps ?c=<id> in the URL), is first copied for whoever edits it.
+   * (the page keeps ?c=<id> in the URL), is first copied for whoever edits it. So is a course nobody owns (made
+   * without browser storage, or its account deleted): otherwise anyone with its link could change it in place.
    */
   private async editable(courseId: string, userId: string | null): Promise<string> {
     const r = await this.db.pool.query<{ id: string }>(
-      `INSERT INTO courses (request, result, input_mode, user_id, shared_from)
-       SELECT request, result, input_mode, $2, id FROM courses
-       WHERE id = $1 AND (frozen OR (user_id IS NOT NULL AND user_id IS DISTINCT FROM $2::uuid)) RETURNING id`,
+      `INSERT INTO courses (request, result, input_mode, user_id, shared_from, undo)
+       SELECT request, result, input_mode, $2, id, undo FROM courses
+       WHERE id = $1 AND (frozen OR user_id IS NULL OR user_id IS DISTINCT FROM $2::uuid) RETURNING id`,
       [courseId, userId],
     );
     return r.rows[0]?.id ?? courseId;
@@ -922,11 +1354,12 @@ export class CourseService {
     const req = row.request;
     const styles = (req.styles ?? []).map((id) => ({ id, weight: 1 }));
     const personal = row.user_id ? await this.me.personal(row.user_id) : null;
+    const clock = storedClock(req.startAt);
     const rows = (await this.candidates(req.origin, req.regionId, Math.max(current.stops.length, 4) * 2, req.bounds)).filter((r) =>
-      keep(r, personal, req.skipVisited === true) && genderFit(r, req.gender) > 0,
+      keep(r, personal, req.skipVisited === true, clock, req.timeBudgetMin ?? NO_TIME_LIMIT_MIN) && genderFit(r, req.gender) > 0,
     );
     const scored = rows.map((r) => {
-      const s = this.score(r, styles, req.budget ?? 'any', req.items ?? [], personal);
+      const s = this.score(r, styles, req.budget ?? 'any', req.items ?? [], personal, req.brands ?? []);
       return { ...s, value: s.value * genderFit(r, req.gender) };
     });
     // Keep the course's own shops even if a same-name branch scores higher, so "다른 가게로" never swaps 지점 for 지점.
@@ -985,7 +1418,17 @@ export class CourseService {
         // "좀 더 가깝게" / "취향 위주로": same pool and count, re-optimised with that variant's weighting.
         const prefer = edit.prefer === 'taste' ? 'taste' : 'nearby';
         const pool = [...ctx.pool].sort((a, b) => b.value - a.value).slice(0, MAX_CANDIDATES);
-        const res = await this.optimize(ctx.req.origin, pool, ids.length, NO_TIME_LIMIT_MIN, true);
+        // Pinned shops stay in a re-plan (they join the pool even if they'd rank lower).
+        const pins = new Set((ctx.req.mustShops ?? []).map((m) => m.id).filter((id) => ids.includes(id)));
+        // A brand asked for in the conditions stays like a pin: the course's shop carrying it.
+        for (const b of ctx.req.brands ?? []) {
+          const carrier = ids.find((id) => ctx.byId.get(id)?.brand_keys?.includes(b.key));
+          if (carrier) pins.add(carrier);
+        }
+        for (const id of pins) if (!pool.some((s) => s.id === id)) pool.push(ctx.byId.get(id) ?? this.kept(ctx, id));
+        const res = await this.optimize(ctx.req.origin, oneStorePerBrand(pool, pins), ids.length, NO_TIME_LIMIT_MIN, true, pins, {
+          clock: storedClock(ctx.req.startAt), end: ctx.req.end,
+        });
         ids = (res.find((x) => x.variant === prefer) ?? res[0]).stop_ids;
         return { ids, message: prefer === 'nearby' ? '더 가까운 가게 위주로 다시 짰어요' : '취향에 더 맞는 가게 위주로 다시 짰어요' };
       }
@@ -1009,7 +1452,7 @@ export class CourseService {
     const row = /^\d+$/.test(shopId) ? (await this.candidatesById([shopId]))[0] : undefined;
     if (!row) throw new BadRequestException('그 가게를 찾지 못했어요 (문을 닫았거나 정보가 없는 곳일 수 있어요)');
     if (streetM(ctx.req.origin, row) > MUST_MAX_M * 2) throw new BadRequestException(`${topic(row.name)} 이 코스에서 너무 멀어요`);
-    const s = this.score(row, ctx.styleIds.map((id) => ({ id, weight: 1 })), ctx.req.budget ?? 'any', ctx.req.items ?? []);
+    const s = this.score(row, ctx.styleIds.map((id) => ({ id, weight: 1 })), ctx.req.budget ?? 'any', ctx.req.items ?? [], null, ctx.req.brands ?? []);
     ctx.byId.set(s.id, s);
     ctx.pool.push(s);
     return s;
@@ -1020,20 +1463,74 @@ export class CourseService {
    * start. A "move" is the user's own order and is left alone.
    */
   private reordered(ctx: EditContext, ids: string[], message: string): { ids: string[]; message: string } {
-    const best = shortestOrder(ctx.req.origin, ids.map((id) => ({ id, ...this.pos(ctx, id) })));
+    const best = shortestOrder(ctx.req.origin, ids.map((id) => ({ id, ...this.pos(ctx, id) })), ctx.req.end);
     const changed = best.some((id, i) => id !== ids[i]);
     return { ids: best, message: changed ? `${message} · 걷는 순서도 다시 맞췄어요` : message };
   }
 
   async saveEdit(ctx: EditContext, variant: CourseVariant, edits: object[]): Promise<void> {
     const result = [...ctx.result];
+    const before = ctx.result[ctx.variantIndex];
     result[ctx.variantIndex] = variant;
     const log = edits.map((e) => ({ ...e, variant: ctx.variantIndex, at: new Date().toISOString() }));
-    await this.db.pool.query(`UPDATE courses SET result = $2, edits = edits || $3::jsonb WHERE id = $1`, [
-      ctx.courseId,
-      JSON.stringify(result),
-      JSON.stringify(log),
-    ]);
+    // The version before goes on the undo stack (the newest UNDO_KEEP), unless the edit changed nothing to undo.
+    const step = routeKey(before) === routeKey(variant) ? null : JSON.stringify([{ variant: ctx.variantIndex, before }]);
+    await this.db.pool.query(
+      `UPDATE courses SET result = $2, edits = edits || $3::jsonb,
+              undo = CASE WHEN $4::jsonb IS NULL THEN undo ELSE (
+                SELECT coalesce(jsonb_agg(e ORDER BY i), '[]'::jsonb)
+                FROM jsonb_array_elements(undo || $4::jsonb) WITH ORDINALITY AS x(e, i)
+                WHERE i > jsonb_array_length(undo || $4::jsonb) - ${UNDO_KEEP}) END
+       WHERE id = $1`,
+      [ctx.courseId, JSON.stringify(result), JSON.stringify(log), step],
+    );
+  }
+
+  /** "이 코스 어땠어요?" after a walk: one rating per person and course (asked again = changed). */
+  async rate(courseId: string, userId: string, rating: number, note?: string): Promise<boolean> {
+    if (!UUID.test(courseId)) throw new BadRequestException('코스를 찾지 못했어요');
+    if (![-1, 0, 1].includes(rating)) throw new BadRequestException('평가는 좋았어요·그저 그랬어요·별로였어요 중 하나예요');
+    const text = note?.trim() || null;
+    if (text && text.length > 300) throw new BadRequestException('한 줄은 300자 안으로 써 주세요');
+    const r = await this.db.pool.query(
+      `INSERT INTO course_ratings (course_id, user_id, rating, note) SELECT id, $2, $3, $4 FROM courses WHERE id = $1
+       ON CONFLICT (course_id, user_id) DO UPDATE SET rating = EXCLUDED.rating, note = coalesce(EXCLUDED.note, course_ratings.note), created_at = now()`,
+      [courseId, userId, rating, text],
+    );
+    if (!r.rowCount) throw new BadRequestException('코스를 찾지 못했어요');
+    return true;
+  }
+
+  /**
+   * 되돌리기: the version before this variant's last edit comes back, on the server too, so a reload doesn't bring the
+   * undone edit back. A shared course is copied first, like any edit (its undo stack comes along).
+   */
+  async undo(courseId: string, variantIndex: number, userId: string | null): Promise<CourseEditResult> {
+    if (!UUID.test(courseId)) throw new BadRequestException('코스를 찾지 못했어요');
+    const own = await this.editable(courseId, userId);
+    const client = await this.db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = (await client.query<{ request: StoredRequest; result: CourseVariant[]; undo: { variant: number; before: CourseVariant }[] }>(
+        'SELECT request, result, undo FROM courses WHERE id = $1 FOR UPDATE', [own],
+      )).rows[0];
+      if (!row) throw new BadRequestException('코스를 찾지 못했어요');
+      const at = row.undo.map((u) => u.variant).lastIndexOf(variantIndex);
+      if (at < 0) throw new BadRequestException('되돌릴 고치기가 없어요');
+      const before = row.undo[at].before;
+      const result = row.result.map((v, i) => (i === variantIndex ? before : v));
+      const log = [{ op: 'undo', variant: variantIndex, at: new Date().toISOString() }];
+      await client.query('UPDATE courses SET result = $2, undo = $3, edits = edits || $4::jsonb WHERE id = $1', [
+        own, JSON.stringify(result), JSON.stringify(row.undo.filter((_, i) => i !== at)), JSON.stringify(log),
+      ]);
+      await client.query('COMMIT');
+      return { courseId: own, variant: await this.timed(before, storedClock(row.request.startAt)), message: '되돌렸어요', mustShops: row.request.mustShops ?? [] };
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   /** Recomputes legs and times for shops in the given order (same walking model as /optimize). */
@@ -1046,7 +1543,9 @@ export class CourseService {
       prev = s;
       return { distance_m: Math.round(d), duration_min: Math.round((d / WALK_M_PER_MIN) * 10) / 10 };
     });
-    const distance = legs.reduce((a, l) => a + l.distance_m, 0);
+    const end = ctx.req.end;
+    const toEnd = end ? Math.round(streetM(prev, end)) : 0;
+    const distance = legs.reduce((a, l) => a + l.distance_m, 0) + toEnd;
     const walk = distance / WALK_M_PER_MIN;
     const dwell = shops.reduce((a, s) => a + dwellMin(s.kind), 0);
     return {
@@ -1056,6 +1555,7 @@ export class CourseService {
       totalDistanceM: distance,
       walkMin: Math.round(walk * 10) / 10,
       totalMin: Math.round((walk + dwell) * 10) / 10,
+      endLeg: end ? { distanceM: toEnd, durationMin: Math.round((toEnd / WALK_M_PER_MIN) * 10) / 10, path: [prev, { lat: end.lat, lng: end.lng }] } : undefined,
     };
   }
 
@@ -1063,9 +1563,12 @@ export class CourseService {
   private bestFor(ctx: EditContext, ids: string[], slot: number | null, edit: CourseEditInput): Scored | null {
     const taken = new Set([...ids, ...(edit.avoid ?? [])]);
     const posList = ids.map((x) => this.pos(ctx, x));
+    // One store per brand: no second 아더에러 store next to the one the course keeps.
+    const brandsIn = new Set(ids.filter((_, k) => k !== slot).map((id) => storeBrandKey(ctx.byId.get(id) ?? this.kept(ctx, id))).filter(Boolean));
     let best: { s: Scored; score: number } | null = null;
     for (const c of ctx.pool) {
       if (taken.has(c.id) || !this.wants(c, edit)) continue;
+      if (brandsIn.has(storeBrandKey(c))) continue;
       let extraM: number;
       if (slot === null) {
         extraM = this.insertCost(ctx.req.origin, posList, this.cheapestSlot(ctx.req.origin, posList, c), c);
@@ -1144,7 +1647,7 @@ export class CourseService {
     const sh = st.shop;
     return {
       id, name: sh.name, kind: sh.kind, category: sh.category, gender: null, lat: sh.lat, lng: sh.lng,
-      road_address: sh.roadAddress ?? null, summary: sh.summary ?? null, reason_material: null, hours: null,
+      road_address: sh.roadAddress ?? null, summary: sh.summary ?? null, reason_material: null, hours: null, hours_source: null, brand_keys: null,
       price_range: sh.priceRange ?? null, items: null, confidence: null, matched_posts: sh.littleKnown ? 0 : null,
       evidence_at: null, on_kakao: true, place_url: sh.placeUrl ?? null, source_categories: null,
       scores: Object.fromEntries(sh.topStyles.map((t) => [t.style, t.score])),
@@ -1165,7 +1668,8 @@ export class CourseService {
     const quota = Math.min(room - 1, present.length - 1, Math.max(1, Math.ceil(present.length * KEEP_SHARE)));
     const liked = present.filter((id) => personal?.liked.has(id));
     const best = present.filter((id) => !liked.includes(id)).sort((a, b) => byId.get(b)!.value - byId.get(a)!.value);
-    return [...liked, ...best].slice(0, Math.max(quota, Math.min(liked.length, present.length - 1)));
+    // Saved shops stay too, but never more than the room the pinned shops leave (they come first).
+    return [...liked, ...best].slice(0, Math.min(room - 1, Math.max(quota, Math.min(liked.length, present.length - 1))));
   }
 
   /** "X·Y는 그대로 두고 나머지를 바꿨어요" / "꼭 넣을 가게 Z는 시간 안에 넣지 못했어요". */
@@ -1180,15 +1684,27 @@ export class CourseService {
     return parts.filter(Boolean).join(' · ') || undefined;
   }
 
-  private async optimize(origin: LatLngT, pool: Scored[], stopCount: number, timeBudgetMin: number, exact: boolean, must: Set<string> = new Set()) {
+  private async optimize(
+    origin: LatLngT, pool: Scored[], stopCount: number, timeBudgetMin: number, exact: boolean, must: Set<string> = new Set(),
+    opts: { clock?: Clock; end?: LatLngT; distanceScale?: number } = {},
+  ) {
     const res = await this.model.post<{ courses: ModelCourse[] }>('/optimize', {
       origin,
-      candidates: pool.map((s) => ({
-        id: s.id, lat: s.lat, lng: s.lng, value: Number(s.value.toFixed(4)), dwell_min: dwellMin(s.kind), ...(must.has(s.id) ? { must: true } : {}),
-      })),
+      candidates: pool.map((s) => {
+        // Hours known: the optimiser reaches the shop only while it's open — a pinned shop too, so one that opens at 12
+        // isn't the first stop of a 10:00 walk. A pinned shop closed all through the course has no window and stays in
+        // (its card says it's closed then).
+        const w = opts.clock ? windowFor(s.hours, opts.clock, timeBudgetMin) : null;
+        return {
+          id: s.id, lat: s.lat, lng: s.lng, value: Number(s.value.toFixed(4)), dwell_min: dwellMin(s.kind), ...(must.has(s.id) ? { must: true } : {}),
+          ...(w && w !== 'closed' ? { open_from: Math.round(w.from), open_until: Math.round(w.until) } : {}),
+        };
+      }),
       stop_count: stopCount,
       time_budget_min: timeBudgetMin,
       exact_count: exact,
+      ...(opts.end ? { end: { lat: opts.end.lat, lng: opts.end.lng } } : {}),
+      ...(opts.distanceScale && opts.distanceScale !== 1 ? { distance_scale: opts.distanceScale } : {}),
     });
     return res.courses;
   }
@@ -1210,8 +1726,8 @@ export class CourseService {
             .slice(0, 3)
             .map(([style, score]) => ({ style, score })),
           littleKnown: s.matched_posts === 0 || (s.evidence_at !== null && !s.matched_posts),
-          hoursToday: hoursToday(s.hours),
         },
+        brands: s.brandHit ?? [],
         reason: s.keptReason ?? this.reason(s, styleIds),
         legFromPrev: { distanceM: legs[i].distance_m, durationMin: legs[i].duration_min, path: [prev, here] },
       };
@@ -1244,6 +1760,36 @@ export class CourseService {
   }
 
   /** Kakao category search for the subway station (SW8) nearest a point, within 1.2 km. Cached per ~100 m cell. */
+  /**
+   * A name for a point picked on the map ("고른 곳" says nothing on the course): the subway station within a few
+   * hundred metres, else the building there, else the neighbourhood (Kakao). undefined when Kakao can't say.
+   */
+  async nameOfPoint(p: LatLngT): Promise<string | undefined> {
+    const key = this.config.get<string>('KAKAO_REST_API_KEY');
+    if (!key) return undefined;
+    const get = async <T>(path: string, q: Record<string, string>): Promise<T | undefined> => {
+      try {
+        const res = await fetch(`https://dapi.kakao.com${path}?${new URLSearchParams(q)}`, {
+          headers: { Authorization: `KakaoAK ${key}` },
+          signal: AbortSignal.timeout(3000),
+        });
+        return res.ok ? ((await res.json()) as T) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const xy = { x: String(p.lng), y: String(p.lat) };
+    const st = await get<{ documents: { place_name: string }[] }>('/v2/local/search/category.json', {
+      ...xy, category_group_code: 'SW8', radius: String(PICKED_STATION_M), sort: 'distance',
+    });
+    if (st?.documents[0]) return st.documents[0].place_name.split(' ')[0];
+    const addr = await get<{ documents: { road_address?: { building_name?: string } | null; address?: { region_3depth_name?: string } | null }[] }>(
+      '/v2/local/geo/coord2address.json', xy,
+    );
+    const d = addr?.documents[0];
+    return d?.road_address?.building_name || d?.address?.region_3depth_name || undefined;
+  }
+
   private async stationNear(center: LatLngT): Promise<{ lat: number; lng: number; name: string } | null> {
     const cacheKey = `${center.lat.toFixed(3)},${center.lng.toFixed(3)}`;
     if (this.stations.has(cacheKey)) return this.stations.get(cacheKey)!;
@@ -1307,7 +1853,9 @@ export class CourseService {
    * value 0-1 = 60% style fit + 20% popularity + 20% confidence, nudged by budget, wanted items and the user's own
    * history (saved / liked shops up, and with no styles chosen, a lean towards the styles of shops they liked).
    */
-  private score(r: Row, styles: { id: string; weight: number }[], budget: string, items: string[], personal: Personal | null = null): Scored {
+  private score(
+    r: Row, styles: { id: string; weight: number }[], budget: string, items: string[], personal: Personal | null = null, brands: BrandRef[] = [],
+  ): Scored {
     const known = r.scores && Object.keys(r.scores).length ? r.scores : null;
     const fit = known ?? CATEGORY_PRIOR[r.category] ?? {};
     const taste = personal && personal.taste.signals >= MIN_SIGNALS ? personal.taste : null;
@@ -1331,13 +1879,16 @@ export class CourseService {
     // Items ("데님 위주"): share of wanted items the shop is known to sell.
     if (items.length && r.items?.length) value += 0.12 * (items.filter((i) => r.items!.includes(i)).length / items.length);
     if (personal?.liked.has(r.id)) value += 0.1;
+    // Brands ("아더에러 파는 데"): carrying what was asked for counts about as much as a strong style match.
+    const brandHit = brands.filter((b) => r.brand_keys?.includes(b.key)).map((b) => b.name);
+    if (brands.length) value += brandHit.length ? 0.25 + 0.15 * (brandHit.length / brands.length) : 0;
     if (taste) {
       if (budget === 'any' && taste.price && r.price_range === taste.price) value += PRICE_MATCH_BONUS;
       // Something new each time: their own recent course shops step back, unmet shops that fit step up.
       if (taste.recent.has(r.id) && !personal!.liked.has(r.id)) value *= RECENT_FACTOR;
       else if (tf !== null && tf > 0.25 && !taste.known.has(r.id)) value += NEW_MATCH_BONUS;
     }
-    return { ...r, fit, value: Math.max(0, Math.min(1, value)) };
+    return { ...r, fit, value: Math.max(0, Math.min(1, value)), brandHit: brandHit.length ? brandHit : undefined };
   }
 
   /** One line on how the taste profile shaped this course (shown under the course title). */
@@ -1358,8 +1909,53 @@ export class CourseService {
       .filter((x) => x.score >= 5)
       .sort((a, b) => b.score - a.score)[0];
     const parts: string[] = [];
+    if (s.brandHit?.length) parts.push(`${s.brandHit.join('·')} 취급`);
     if (best) parts.push(`${STYLE_LABEL[best.id]} ${best.score}점`);
     parts.push(s.reason_material || s.summary || CATEGORY_LABEL[s.category] || '옷가게');
     return parts.join(' · ');
   }
+}
+
+/**
+ * "내 위치" is kept only to a ~200 m cell (0.002° lat × 0.0025° lng) before planning: the course, its walking path
+ * and its share link would otherwise show exactly where someone stood, often their home.
+ */
+/** What localizeMany fetched up front for a list of courses. */
+interface ShopText { id: string; category: string; summary: string | null; reason_material: string | null; scores: Record<string, number> | null }
+interface Prefetch {
+  rows: Map<string, ShopText>;
+  hours: Map<string, { hours: HoursDay[] | null; source: 'owner' | 'blog' | null }>;
+  news: Map<string, string>;
+  brandsEn: Map<string, string>;
+}
+
+// Undo keeps this many earlier versions per course (all variants together).
+const UNDO_KEEP = 30;
+
+/** What an edit can change: the shops in order and the breaks. Same key = nothing to undo. */
+export function routeKey(v: CourseVariant | undefined): string {
+  if (!v) return '';
+  return JSON.stringify([v.stops.map((s) => s.shop.id), (v.breaks ?? []).map((b) => `${b.kind}:${b.name}:${b.afterOrder}`)]);
+}
+
+/** A brand store's brand (the key oneStorePerBrand compares); undefined for shops that aren't one brand's store. */
+function storeBrandKey(s: Scored): string | undefined {
+  return s.category === 'brand' ? s.brand_keys?.[0] : undefined;
+}
+
+/** "18시까지" from the base course still makes sense for a group course starting at `startAt` (or now). */
+function endStillAhead(startAt: string | undefined, endBy: string): boolean {
+  try {
+    minutesUntil(clockAt(startAt), endBy);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function coarseGps(input: CourseRequestInput): CourseRequestInput {
+  const g = input.origin?.gps;
+  if (!g) return input;
+  const snap = (x: number, cell: number) => Number((Math.round(x / cell) * cell).toFixed(4));
+  return { ...input, origin: { ...input.origin, gps: { ...g, lat: snap(g.lat, 0.002), lng: snap(g.lng, 0.0025) } } };
 }

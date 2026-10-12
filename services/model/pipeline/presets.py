@@ -16,7 +16,7 @@ from collections import defaultdict
 
 from pydantic import BaseModel, Field
 
-from ai import generate
+from ai import AIError, generate
 from app.catalog import load_catalog
 from pipeline.db import connect, pipeline_run
 
@@ -122,6 +122,14 @@ def pick(per_region: int, min_fit: int) -> list[dict]:
     return picked
 
 
+def done_today() -> bool:
+    """Presets were rebuilt in the last 20 hours: the region loop asks after every region, once a day is plenty."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM pipeline_runs WHERE step = 'presets' AND status = 'ok' AND finished_at > now() - interval '20 hours')"
+        ).fetchone()[0]
+
+
 def run(per_region: int, min_fit: int, dry_run: bool) -> dict:
     presets = pick(per_region, min_fit)
     if dry_run:
@@ -129,6 +137,13 @@ def run(per_region: int, min_fit: int, dry_run: bool) -> dict:
 
     with connect() as conn, pipeline_run(conn, "presets") as stats:
         texts: dict[int, PresetText] = {}
+        # When the AI can't write today, a card keeps the title it had (same area and styles), else a plain one: the
+        # picks are still refreshed, and one busy model no longer fails the whole step.
+        before = {
+            (rid, tuple(sorted(styles))): (title, intro)
+            for rid, styles, title, intro in conn.execute("SELECT region_id, styles, title, intro FROM presets")
+        }
+        stats["ai_failed"] = 0
         for i in range(0, len(presets), 15):
             chunk = [
                 {"key": i + j, "region": p["region"], "region_intro": p["region_intro"],
@@ -136,22 +151,29 @@ def run(per_region: int, min_fit: int, dry_run: bool) -> dict:
                  "examples": p["examples"]}
                 for j, p in enumerate(presets[i : i + 15])
             ]
-            result = generate(
-                purpose="name_presets", system=SYSTEM,
-                prompt="각 카드의 제목과 소개를 써라.\n\n" + json.dumps(chunk, ensure_ascii=False, indent=1),
-                schema=PresetTexts, tier="smart", conn=conn, run_id=stats["run_id"],
-            )
+            try:
+                result = generate(
+                    purpose="name_presets", system=SYSTEM,
+                    prompt="각 카드의 제목과 소개를 써라.\n\n" + json.dumps(chunk, ensure_ascii=False, indent=1),
+                    schema=PresetTexts, tier="smart", conn=conn, run_id=stats["run_id"],
+                )
+            except AIError as e:
+                stats["ai_failed"] += 1
+                print(f"  presets: AI unavailable for cards {i}-{i + len(chunk) - 1}, keeping earlier titles ({e!s:.120})", flush=True)
+                continue
             texts.update({t.key: t for t in result.presets})
 
         with conn.transaction():
             conn.execute("DELETE FROM presets")
             for key, p in enumerate(presets):
                 t = texts.get(key)
-                title = t.title if t else f"{p['region']} {' · '.join(STYLE_LABEL[s] for s in p['styles'])} 코스"
+                old = before.get((p["region_id"], tuple(sorted(p["styles"]))))
+                title = t.title if t else old[0] if old else f"{p['region']} {' · '.join(STYLE_LABEL[s] for s in p['styles'])} 코스"
+                intro = t.intro if t else old[1] if old else None
                 conn.execute(
                     """INSERT INTO presets (region_id, styles, stop_count, title, intro, fit_count, scored_share, rank)
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (p["region_id"], p["styles"], p["stop_count"], title, t.intro if t else None, p["fit"], p["scored_share"], p["rank"]),
+                    (p["region_id"], p["styles"], p["stop_count"], title, intro, p["fit"], p["scored_share"], p["rank"]),
                 )
         stats["presets"] = [{"title": t, "fit": f} for t, f in conn.execute("SELECT title, fit_count FROM presets ORDER BY rank DESC")]
     return stats

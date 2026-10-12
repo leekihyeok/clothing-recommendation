@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 // ROUTE 01 logo (option B, chosen 2026-10-07): the O of ROUTE is an open loop — a walking route — with the one
 // signal-orange dot where it starts. "01" sits small, same typeface. Colours and fonts follow design-system/MASTER.md.
 
@@ -34,7 +36,7 @@ export function Logo() {
   return (
     <div className="logo">
       <Wordmark />
-      <span className="logo-tagline">취향대로 걷는 서울 옷가게 코스</span>
+      <span className="logo-tagline">{t('취향대로 걷는 서울 옷가게 코스', "Seoul's clothing shops, walked your way")}</span>
     </div>
   );
 }

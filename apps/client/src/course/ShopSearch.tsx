@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from 'react';
 import { graphql } from '../gql';
 import type { SearchShopsQuery } from '../gql/graphql';
 import { CATEGORY_BY_ID } from '../map/categories';
+import { count, t } from '../i18n';
 
 const SearchDoc = graphql(`
   query SearchShops($q: String!, $near: LatLngInput, $strict: Boolean) {
@@ -17,8 +18,8 @@ export type ShopHit = SearchShopsQuery['searchShops'][number];
 export function useShopHits(text: string, near?: { lat: number; lng: number } | null, strict = false) {
   const [q, setQ] = useState('');
   useEffect(() => {
-    const t = setTimeout(() => setQ(text.trim()), 250);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setQ(text.trim()), 250);
+    return () => clearTimeout(timer);
   }, [text]);
   const { data, loading } = useQuery(SearchDoc, {
     variables: { q, near: near ? { lat: near.lat, lng: near.lng } : null, strict },
@@ -68,7 +69,7 @@ export function ShopSearch({
           value={text}
           autoFocus={autoFocus}
           autoComplete="off"
-          placeholder="가게 이름 (예: 폴유, EQL)"
+          placeholder={t('가게 이름 (예: 폴유, EQL)', 'Shop name (e.g. 폴유, EQL)')}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') onClose?.();
@@ -77,18 +78,18 @@ export function ShopSearch({
           aria-controls={`${id}-list`}
         />
         {onClose && (
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="찾기 닫기">
+          <button type="button" className="icon-btn" onClick={onClose} aria-label={t('찾기 닫기', 'Close search')}>
             <X size={16} aria-hidden />
           </button>
         )}
       </div>
       <div aria-live="polite" className="visually-hidden">
-        {q && !loading ? `${hits.length}곳 찾음` : ''}
+        {q && !loading ? t(`${hits.length}곳 찾음`, `${count(hits.length, '곳', 'shop')} found`) : ''}
       </div>
       {q.length > 0 && (
         <ul className="shop-search-list" id={`${id}-list`}>
-          {loading && <li className="hint px-2">찾는 중…</li>}
-          {!loading && hits.length === 0 && <li className="hint px-2">‘{q}’ 가게를 찾지 못했어요. 이름을 조금 줄여 보세요.</li>}
+          {loading && <li className="hint px-2">{t('찾는 중…', 'Searching…')}</li>}
+          {!loading && hits.length === 0 && <li className="hint px-2">{t(`‘${q}’ 가게를 찾지 못했어요. 이름을 조금 줄여 보세요.`, `No shop called ‘${q}’. Try a shorter name.`)}</li>}
           {hits.map((h) => (
             <li key={h.id}>
               <button type="button" className="shop-search-hit" onClick={() => onPick(h)}>

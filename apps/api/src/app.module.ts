@@ -1,3 +1,4 @@
+import { formatError } from './infra/messages';
 import { join } from 'node:path';
 import { ApolloDriver, ApolloDriverConfig } from '@nestjs/apollo';
 import { Module } from '@nestjs/common';
@@ -24,6 +25,11 @@ import { ShopsModule } from './shops/shops.module';
       sortSchema: true,
       // Resolvers read the anonymous browser id header (x-route-anon) from the request.
       context: ({ req }: { req: unknown }) => ({ req }),
+      // Error messages in the language the request asked for (x-route-lang); in production no internals.
+      formatError,
+      includeStacktraceInErrorResponses: process.env.NODE_ENV !== 'production',
+      // The schema is public in dev (codegen, Apollo Sandbox), not in production.
+      introspection: process.env.NODE_ENV !== 'production',
     }),
     InfraModule,
     HealthModule,

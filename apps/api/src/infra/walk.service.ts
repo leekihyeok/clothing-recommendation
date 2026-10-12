@@ -11,8 +11,12 @@ export interface WalkLeg {
 }
 
 const URL = 'https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1&format=json';
-const CACHE_DAYS = 30;
+// Streets don't move: a leg stays cached for 90 days.
+const CACHE_DAYS = 90;
 const CONCURRENCY = 4;
+// T map calls per day (Seoul) before falling back to the straight-line estimate, so the free quota isn't run past.
+// TMAP_DAILY_CAP in .env; the count is in Redis (walk:calls:<date>), shown on the admin page.
+const DEFAULT_DAILY_CAP = 800;
 
 /**
  * Real walking routes from the T map pedestrian API (PLAN.md 6.5): the street path, distance and time per leg.
@@ -23,12 +27,16 @@ const CONCURRENCY = 4;
 export class WalkService {
   private readonly log = new Logger(WalkService.name);
   private readonly key: string | undefined;
+  private readonly dailyCap: number;
+  // The same leg asked for twice at once (the three versions of a course share legs): one T map call.
+  private readonly inFlight = new Map<string, Promise<WalkLeg | null>>();
 
   constructor(
     config: ConfigService,
     private readonly redis: RedisService,
   ) {
     this.key = config.get<string>('TMAP_APP_KEY') || undefined;
+    this.dailyCap = Number(config.get<string>('TMAP_DAILY_CAP') ?? DEFAULT_DAILY_CAP);
   }
 
   get enabled(): boolean {
@@ -51,10 +59,34 @@ export class WalkService {
     return out;
   }
 
-  private async leg(a: LatLng, b: LatLng): Promise<WalkLeg | null> {
-    const cacheKey = `walk:v1:${a.lat.toFixed(5)},${a.lng.toFixed(5)}:${b.lat.toFixed(5)},${b.lng.toFixed(5)}`;
+  private leg(a: LatLng, b: LatLng): Promise<WalkLeg | null> {
+    // ~10 m: the same shop door, the same station exit.
+    const cacheKey = `walk:v2:${a.lat.toFixed(4)},${a.lng.toFixed(4)}:${b.lat.toFixed(4)},${b.lng.toFixed(4)}`;
+    const running = this.inFlight.get(cacheKey);
+    if (running) return running;
+    const p = this.fetchLeg(a, b, cacheKey).finally(() => this.inFlight.delete(cacheKey));
+    this.inFlight.set(cacheKey, p);
+    return p;
+  }
+
+  /** Counts one T map call for today; false once today's cap is reached (Redis down: no cap, as before). */
+  private async spend(): Promise<boolean> {
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
+    try {
+      if (this.redis.client.status === 'wait') await this.redis.client.connect();
+      const n = await this.redis.client.incr(`walk:calls:${day}`);
+      if (n === 1) await this.redis.client.expire(`walk:calls:${day}`, 3 * 86400);
+      if (n === this.dailyCap) this.log.warn(`T map daily cap (${this.dailyCap}) reached: straight-line estimates until midnight`);
+      return n <= this.dailyCap;
+    } catch {
+      return true;
+    }
+  }
+
+  private async fetchLeg(a: LatLng, b: LatLng, cacheKey: string): Promise<WalkLeg | null> {
     const cached = await this.cacheGet(cacheKey);
     if (cached) return cached;
+    if (!(await this.spend())) return null; // over today's cap: the caller keeps the estimate
     try {
       const res = await fetch(URL, {
         method: 'POST',

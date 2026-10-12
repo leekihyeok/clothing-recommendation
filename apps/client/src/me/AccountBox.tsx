@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { loginUrl, logoutUrl, useAccount } from './useAccount';
 import { anonIdPersists } from './anonId';
 
@@ -25,15 +26,17 @@ export function AccountBox({ notice }: { notice: string | null }) {
       )}
       {account?.loggedIn ? (
         <p className="hint mt-0">
-          <strong>{account.nickname ?? '카카오 계정'}</strong>님 계정에 저장돼요. 다른 기기에서 로그인해도 이어져요.{' '}
+          {t('', 'Saved to ')}
+          <strong>{account.nickname ?? t('카카오 계정', 'your Kakao account')}</strong>
+          {t('님 계정에 저장돼요. 다른 기기에서 로그인해도 이어져요.', "'s account. Log in on any device to pick up where you left off.")}{' '}
           <a className="btn-text p-0" style={{ minHeight: 0 }} href={logoutUrl()}>
-            로그아웃
+            {t('로그아웃', 'Log out')}
           </a>
           {account.isAdmin && (
             <>
               {' · '}
               <a className="btn-text p-0" style={{ minHeight: 0 }} href="/admin">
-                관리자 화면
+                {t('관리자 화면', 'Admin')}
               </a>
             </>
           )}
@@ -42,12 +45,15 @@ export function AccountBox({ notice }: { notice: string | null }) {
         <>
           <p className="hint mt-0">
             {anonIdPersists()
-              ? '지금은 이 브라우저에만 저장돼요. 카카오로 로그인하면 다른 기기에서도 이어져요.'
-              : '이 브라우저는 저장소를 막고 있어서, 창을 닫으면 기록이 사라져요. 로그인하면 계정에 남아요.'}
+              ? t('지금은 이 브라우저에만 저장돼요. 카카오로 로그인하면 다른 기기에서도 이어져요.', 'For now this is saved in this browser only. Log in with Kakao to keep it on every device.')
+              : t(
+                  '이 브라우저는 저장소를 막고 있어서, 창을 닫으면 기록이 사라져요. 로그인하면 계정에 남아요.',
+                  'This browser blocks storage, so your history goes when you close the window. Log in to keep it in your account.',
+                )}
           </p>
           <a className="kakao-login" href={loginUrl()}>
             <KakaoSymbol />
-            카카오 로그인
+            {t('카카오 로그인', 'Log in with Kakao')}
           </a>
         </>
       )}

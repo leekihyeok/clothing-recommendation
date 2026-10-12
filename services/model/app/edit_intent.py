@@ -27,6 +27,7 @@ class Stop(BaseModel):
 class EditIntentRequest(BaseModel):
     text: str = Field(min_length=1, max_length=300)
     stops: list[Stop]
+    lang: str = "ko"  # the app's language: "en" → the reply is written in English
 
 
 class Op(BaseModel):
@@ -71,7 +72,7 @@ def edit_intent(req: EditIntentRequest) -> EditIntent:
     return generate(
         purpose="edit_intent",
         system=SYSTEM,
-        prompt=f"지금 코스:\n{course}\n\n사용자: {req.text}",
+        prompt=f"지금 코스:\n{course}\n\n사용자: {req.text}" + ("\n\nreply는 영어로 쓴다." if req.lang == "en" else ""),
         schema=EditIntent,
         tier="fast",
         paced=False,

@@ -26,7 +26,14 @@ docker compose -f (Join-Path $root 'infra\docker-compose.yml') up -d --wait *> (
 
 Remove-Item (Join-Path $logs 'STOP') -ErrorAction SilentlyContinue
 $log = Join-Path $logs 'refresh.log'
-if (Test-Path $log) { Move-Item $log (Join-Path $logs 'refresh.prev.log') -Force }
+# Earlier runs' logs are kept (refresh-<when it was replaced>.log, the newest 20), not overwritten: when the keeper
+# stopped, its last log is what says why.
+if (Test-Path $log) {
+  Move-Item $log (Join-Path $logs ("refresh-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))) -Force
+  Get-ChildItem $logs -Filter 'refresh-*.log' | Sort-Object Name -Descending | Select-Object -Skip 20 | Remove-Item -Force
+}
+$err = Join-Path $logs 'refresh.err'
+if ((Test-Path $err) -and (Get-Item $err).Length -gt 0) { Move-Item $err (Join-Path $logs ("refresh-{0:yyyyMMdd-HHmmss}.err" -f (Get-Date))) -Force }
 $proc = Start-Process -FilePath (Join-Path $root 'services\model\.venv\Scripts\python.exe') `
   -ArgumentList '-u', '-m', 'pipeline.refresh' -WorkingDirectory (Join-Path $root 'services\model') -WindowStyle Hidden -PassThru `
   -RedirectStandardOutput $log -RedirectStandardError (Join-Path $logs 'refresh.err')
