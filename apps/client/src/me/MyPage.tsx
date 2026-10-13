@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, Camera, Heart, PencilSimple, Path, Storefront, Trash } from '@phosphor-icons/react';
-import { type KeyboardEvent, useRef, useState } from 'react';
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { useMyCourses, useSavedCourses } from '../course/useSavedCourses';
 import { count, getLang, t } from '../i18n';
 import { CATEGORY_BY_ID } from '../map/categories';
@@ -13,10 +13,12 @@ import { useMyReviews, useProfile, useProfileEdits, useTaste } from './useProfil
 import { useMyOwnerStatus } from '../shop/useOwners';
 import { requireLogin } from './LoginModal';
 import { SavedNewsList, useNewNewsCount } from '../shop/ShopNews';
+import { type PageProps, Paged } from '../components/Paged';
+import type { MeTab } from '../route';
 
 const RATING = (): Record<number, string> => ({ 1: t('좋았어요', 'Liked it'), [-1]: t('별로였어요', 'Not for me') });
 
-type Tab = 'courses' | 'saved' | 'news' | 'visited' | 'reviews' | 'recent';
+type Tab = MeTab;
 const tabs = (): { id: Tab; label: string; login: boolean }[] => [
   { id: 'courses', label: t('저장한 코스', 'Saved courses'), login: true },
   { id: 'saved', label: t('찜한 가게', 'Saved shops'), login: true },
@@ -36,14 +38,18 @@ interface Props {
   /** "찜한 가게로 코스 짜기" for one neighbourhood of saved shops. */
   onPlanSaved: (g: SavedGroupLike) => void;
   busy: boolean;
+  /** The tab and page to open on (from the address after a reload, or where it was last left). */
+  place: { tab: Tab | null; page: number };
+  /** The tab or page changed: kept in the address. */
+  onPlace: (tab: Tab, page: number) => void;
 }
 
 /** 마이페이지: profile, then saved courses, saved shops, visits, my reviews and recent courses in tabs. */
-export function MyPage({ onClose, onOpenCourse, onOpenShop, styleLabels, notice = null, onPlanSaved, busy }: Props) {
+export function MyPage({ onClose, onOpenCourse, onOpenShop, styleLabels, notice = null, onPlanSaved, busy, place, onPlace }: Props) {
   const account = useAccount();
   const loggedIn = account?.loggedIn === true;
   // Until a tab is picked, the default follows the login state, which arrives after the first render.
-  const [picked, setTab] = useState<Tab | null>(null);
+  const [picked, setTab] = useState<Tab | null>(place.tab);
   const tab: Tab = picked ?? (loggedIn ? 'courses' : 'visited');
   const tabRefs = useRef(new Map<Tab, HTMLButtonElement>());
   const TABS = tabs();
@@ -60,6 +66,15 @@ export function MyPage({ onClose, onOpenCourse, onOpenShop, styleLabels, notice 
 
   const active = TABS.find((x) => x.id === tab)!;
   const unread = useNewNewsCount(!loggedIn);
+  // Each tab keeps its page while another one is open.
+  const [pages, setPages] = useState<Partial<Record<Tab, number>>>(() => (place.tab ? { [place.tab]: place.page } : {}));
+  const page = pages[tab] ?? 1;
+  useEffect(() => onPlace(tab, page), [tab, page]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pager: PageProps = {
+    page,
+    onPage: (p) => setPages((x) => ({ ...x, [tab]: p })),
+    label: t(`${active.label} 페이지`, `${active.label} pages`),
+  };
   return (
     <div className="my-page">
       <button type="button" className="btn-text mb-2" onClick={onClose}>
@@ -108,17 +123,17 @@ export function MyPage({ onClose, onOpenCourse, onOpenShop, styleLabels, notice 
             </button>
           </div>
         ) : tab === 'courses' ? (
-          <SavedCoursesList styleLabels={styleLabels} onOpen={onOpenCourse} />
+          <SavedCoursesList styleLabels={styleLabels} onOpen={onOpenCourse} pager={pager} />
         ) : tab === 'recent' ? (
-          <RecentCoursesList styleLabels={styleLabels} onOpen={onOpenCourse} />
+          <RecentCoursesList styleLabels={styleLabels} onOpen={onOpenCourse} pager={pager} />
         ) : tab === 'news' ? (
-          <SavedNewsList onOpenShop={(id) => onOpenShop(id, null)} />
+          <SavedNewsList onOpenShop={(id) => onOpenShop(id, null)} pager={pager} />
         ) : tab === 'reviews' ? (
-          <MyReviewsList onOpen={(id) => onOpenShop(id, null)} />
+          <MyReviewsList onOpen={(id) => onOpenShop(id, null)} pager={pager} />
         ) : (
           <>
             {tab === 'saved' && <SavedCourseBox onPlan={onPlanSaved} busy={busy} />}
-            <ShopsList which={tab} onOpen={(s) => onOpenShop(s.shop.id, { lat: s.shop.lat, lng: s.shop.lng })} />
+            <ShopsList which={tab} onOpen={(s) => onOpenShop(s.shop.id, { lat: s.shop.lat, lng: s.shop.lng })} pager={pager} />
           </>
         )}
       </div>
@@ -375,18 +390,18 @@ function CourseRows({ courses, styleLabels, onOpen }: { courses: CourseLike[]; s
   );
 }
 
-function SavedCoursesList({ styleLabels, onOpen }: { styleLabels: Record<string, string>; onOpen: (id: string) => void }) {
+function SavedCoursesList({ styleLabels, onOpen, pager }: { styleLabels: Record<string, string>; onOpen: (id: string) => void; pager: PageProps }) {
   const { data, loading } = useSavedCourses();
   const list = data?.savedCourses ?? [];
   if (loading && !data) return <p className="hint">{t('불러오는 중…', 'Loading…')}</p>;
   if (!list.length) return <Empty text={t("저장한 코스가 없어요. 코스 화면의 '저장'을 누르면 여기 모여요.", 'No saved courses yet. Tap "Save" on a course and it shows up here.')} />;
-  return <CourseRows courses={list} styleLabels={styleLabels} onOpen={onOpen} />;
+  return <Paged items={list} {...pager}>{(shown) => <CourseRows courses={shown} styleLabels={styleLabels} onOpen={onOpen} />}</Paged>;
 }
 
-function RecentCoursesList({ styleLabels, onOpen }: { styleLabels: Record<string, string>; onOpen: (id: string) => void }) {
+function RecentCoursesList({ styleLabels, onOpen, pager }: { styleLabels: Record<string, string>; onOpen: (id: string) => void; pager: PageProps }) {
   const list = useMyCourses().data?.myCourses ?? [];
   if (!list.length) return <Empty text={t('아직 짠 코스가 없어요.', "You haven't planned a course yet.")} />;
-  return <CourseRows courses={list} styleLabels={styleLabels} onOpen={onOpen} />;
+  return <Paged items={list} {...pager}>{(shown) => <CourseRows courses={shown} styleLabels={styleLabels} onOpen={onOpen} />}</Paged>;
 }
 
 /**
@@ -426,7 +441,7 @@ function SavedCourseBox({ onPlan, busy }: { onPlan: (g: SavedGroupLike) => void;
   );
 }
 
-function ShopsList({ which, onOpen }: { which: 'saved' | 'visited'; onOpen: (x: MyShopItem) => void }) {
+function ShopsList({ which, onOpen, pager }: { which: 'saved' | 'visited'; onOpen: (x: MyShopItem) => void; pager: PageProps }) {
   const { data, loading } = useMyShops();
   const mine = data?.myShops;
   if (loading && !mine) return <p className="hint">{t('불러오는 중…', 'Loading…')}</p>;
@@ -444,8 +459,10 @@ function ShopsList({ which, onOpen }: { which: 'saved' | 'visited'; onOpen: (x: 
     );
   }
   return (
+    <Paged items={items} {...pager}>
+      {(shown) => (
     <ul className="my-list">
-      {items.map((x) => (
+      {shown.map((x) => (
         <li key={x.shop.id} className={x.shop.status === 'closed' || x.shop.status === 'suspended' ? 'is-gone' : ''}>
           <button type="button" onClick={() => onOpen(x)}>
             <span className="chip-dot" style={{ background: CATEGORY_BY_ID[x.shop.category]?.color }} aria-hidden />
@@ -465,17 +482,21 @@ function ShopsList({ which, onOpen }: { which: 'saved' | 'visited'; onOpen: (x: 
         </li>
       ))}
     </ul>
+      )}
+    </Paged>
   );
 }
 
-function MyReviewsList({ onOpen }: { onOpen: (shopId: string) => void }) {
+function MyReviewsList({ onOpen, pager }: { onOpen: (shopId: string) => void; pager: PageProps }) {
   const { data, loading } = useMyReviews();
   const list = data?.myReviews ?? [];
   if (loading && !data) return <p className="hint">{t('불러오는 중…', 'Loading…')}</p>;
   if (!list.length) return <Empty text={t('쓴 후기가 없어요. 다녀온 가게 화면에서 별점과 후기를 남겨 보세요.', 'No reviews yet. Rate and review a shop you visited from its page.')} />;
   return (
+    <Paged items={list} {...pager}>
+      {(shown) => (
     <ul className="my-list">
-      {list.map((r) => (
+      {shown.map((r) => (
         <li key={r.id}>
           <button type="button" onClick={() => onOpen(r.shopId)}>
             <span className="chip-dot" style={{ background: CATEGORY_BY_ID[r.category]?.color }} aria-hidden />
@@ -490,6 +511,8 @@ function MyReviewsList({ onOpen }: { onOpen: (shopId: string) => void }) {
         </li>
       ))}
     </ul>
+      )}
+    </Paged>
   );
 }
 

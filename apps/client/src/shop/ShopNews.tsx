@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { graphql } from '../gql';
 import type { ShopNewsQuery } from '../gql/graphql';
 import { getLang, t } from '../i18n';
+import { type PageProps, Paged } from '../components/Paged';
 
 export const ShopNewsDoc = graphql(`
   query ShopNews($shopId: ID!) {
@@ -205,7 +206,7 @@ export function useNewNewsCount(skip = false): number {
 }
 
 /** 마이페이지 tab: saved shops' news, newest first. Opening it marks everything seen. */
-export function SavedNewsList({ onOpenShop }: { onOpenShop: (id: string) => void }) {
+export function SavedNewsList({ onOpenShop, pager }: { onOpenShop: (id: string) => void; pager: PageProps }) {
   const { data, loading } = useQuery(MySavedNewsDoc, { fetchPolicy: 'cache-and-network' });
   const [seen] = useState(newsSeenAt);
   useState(() => markNewsSeen());
@@ -225,12 +226,16 @@ export function SavedNewsList({ onOpenShop }: { onOpenShop: (id: string) => void
     );
   }
   return (
-    <div className="news-list">
-      {list.map((n) => (
-        <div key={n.id} className={+new Date(n.createdAt as string) > seen ? 'is-unread' : ''}>
-          <NewsCard n={n} onOpenShop={onOpenShop} />
+    <Paged items={list} {...pager}>
+      {(shown) => (
+        <div className="news-list">
+          {shown.map((n) => (
+            <div key={n.id} className={+new Date(n.createdAt as string) > seen ? 'is-unread' : ''}>
+              <NewsCard n={n} onOpenShop={onOpenShop} />
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      )}
+    </Paged>
   );
 }

@@ -13,7 +13,9 @@ import { takeLoginResult } from './me/useAccount';
 import { CourseForm } from './course/CourseForm';
 import { CourseResult } from './course/CourseResult';
 import { useCourseEdit } from './course/useCourseEdit';
-import { SHARE_PARAM, SHOP_PARAM, useLoadCourse } from './course/useSavedCourses';
+import { SHOP_PARAM, useLoadCourse } from './course/useSavedCourses';
+import { type MeTab, readRoute, writeRoute } from './route';
+import { readDraft, writeDraft } from './draft';
 import { PlanProgress } from './course/PlanProgress';
 import { PresetRow } from './course/PresetRow';
 import { type Echo, PromptBox } from './course/PromptBox';
@@ -48,10 +50,13 @@ export function App() {
   const lang = useLang();
   const apollo = useApolloClient();
   const [categories, setCategories] = useState<string[]>(ALL);
+  // What the address said when the page loaded (route.ts): the screen a reload comes back to.
+  const [initialRoute] = useState(readRoute);
   // The shop detail on screen (?shop=<id> in the address, so it can be linked and survives a reload).
-  const [detailId, setDetailId] = useState<string | null>(() => new URLSearchParams(window.location.search).get(SHOP_PARAM));
+  const [detailId, setDetailId] = useState<string | null>(initialRoute.shop);
   const [viewport, setViewport] = useState<ViewportInfo | null>(null);
-  const [regionId, setRegionId] = useState<string | null>(null);
+  // The area picked on the form, kept through a reload like the rest of the form (draft.ts).
+  const [regionId, setRegionId] = useState<string | null>(() => readDraft<string>('region'));
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null);
   const [course, setCourse] = useState<PlannedCourse | null>(null);
   const [variantIndex, setVariantIndex] = useState(0);
@@ -63,7 +68,9 @@ export function App() {
   const sheet = useSheet(panelRef, () => 28 + (headRef.current?.offsetHeight ?? 80) + (footRef.current?.offsetHeight ?? 120));
   // Back from Kakao login (?login=…): open "내 가게", where the login started, with a line about how it went.
   const [loginNotice] = useState(takeLoginResult);
-  const [showMine, setShowMine] = useState(loginNotice !== null);
+  const [showMine, setShowMine] = useState(loginNotice !== null || initialRoute.me !== null);
+  // 마이페이지's tab and page (?me=&p=), kept while it's closed so it opens where it was.
+  const [mePlace, setMePlace] = useState<{ tab: MeTab | null; page: number }>({ tab: initialRoute.me, page: initialRoute.page });
   // "지도에서 고르기": the next tap on the map sets the start or the finish.
   const [pickMode, setPickMode] = useState<'start' | 'end' | null>(null);
   // 걷기 모드 on the course on screen, and what the map shows meanwhile (my position, the next place).
@@ -90,12 +97,13 @@ export function App() {
   const [linkLoading, setLinkLoading] = useState(false);
   const linkPending = useRef(false);
   // The course in the address (?c=<id>) when the page loaded: a share link, or this user's own course after a reload.
-  const [initialLink] = useState(() => new URLSearchParams(window.location.search).get(SHARE_PARAM));
+  const [initialLink] = useState(initialRoute.course);
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null);
   // Opened from a "같이 가기" link (?g=<id>): the join screen, until a course for the group is open.
   const [joinGroup, setJoinGroup] = useState<string | null>(() => new URLSearchParams(window.location.search).get(GROUP_PARAM));
   const body = useRef<HTMLDivElement>(null);
   const regions = useQuery(RegionsDoc).data?.regions ?? NO_REGIONS;
+  useEffect(() => writeDraft('region', regionId), [regionId]);
   const region = regions.find((r) => r.id === regionId) ?? null;
 
   const planner = usePlanner((c) => {
@@ -114,8 +122,11 @@ export function App() {
     [planner.catalog],
   );
 
-  /** A saved course (share link, "최근 코스") back on screen, with its conditions in the form. */
-  async function openCourse(id: string) {
+  /**
+   * A saved course (share link, "최근 코스") back on screen, with its conditions in the form. From the address (a reload,
+   * back / forward) it opens as it was left: the same version tab, 걷기 모드, and whatever was over it stays.
+   */
+  async function openCourse(id: string, at: { variant?: number; walk?: boolean; keep?: boolean } = {}) {
     setOpenNote(null);
     linkPending.current = true;
     setLinkLoading(true);
@@ -129,11 +140,11 @@ export function App() {
     }
     planner.adopt(c);
     editor.reset();
-    setWalking(false);
+    setWalking(at.walk === true);
     setEcho(null);
-    setShowMine(false);
+    if (!at.keep) setShowMine(false);
     setRegionId(c.request.regionId ?? null);
-    setVariantIndex(0);
+    setVariantIndex(Math.min(at.variant ?? 0, Math.max(0, c.variants.length - 1)));
     setCourse(c);
     sheet.setSnap('half');
     body.current?.scrollTo({ top: 0 });
@@ -149,38 +160,44 @@ export function App() {
   useEffect(() => {
     if (initialLink && !opened.current) {
       opened.current = true; // once, also under StrictMode's double effects
-      openCourse(initialLink);
+      openCourse(initialLink, { variant: initialRoute.variant, walk: initialRoute.walk, keep: true });
     }
   }, [initialLink]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // What's on screen lives in the address (?c=<course>, ?shop=<shop>), so a reload or a copied URL brings it back.
-  // Opening something is a new history entry (browser back closes it); replacing or closing it edits the current one.
+  // What's on screen lives in the address (route.ts), so a reload or a copied URL brings it back. Opening a screen is a
+  // new history entry (browser back closes it); a tab, a page or closing it edits the current one.
   const courseId = course?.id ?? null;
   useEffect(() => {
-    const url = new URL(window.location.href);
-    const was = { c: url.searchParams.get(SHARE_PARAM), shop: url.searchParams.get(SHOP_PARAM) };
-    if (was.c === courseId && was.shop === detailId) return;
     if (linkPending.current || (initialLink && !opened.current)) return; // the course in the address is on its way
     if (!courseId && openNote) return; // a link that didn't open stays visible while the note explains
-    for (const [k, v] of [[SHARE_PARAM, courseId], [SHOP_PARAM, detailId]] as const) {
-      if (v) url.searchParams.set(k, v);
-      else url.searchParams.delete(k);
-    }
-    const isNew = (!was.c && courseId) || (!was.shop && detailId);
-    if (isNew) window.history.pushState(null, '', url);
-    else window.history.replaceState(null, '', url);
-  }, [courseId, detailId, openNote, linkLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+    writeRoute({
+      course: courseId,
+      variant: courseId ? variantIndex : 0,
+      walk: !!courseId && walking,
+      shop: detailId,
+      me: showMine ? (mePlace.tab ?? 'courses') : null,
+      page: mePlace.page,
+    });
+  }, [courseId, variantIndex, walking, detailId, showMine, mePlace, openNote, linkLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Browser back / forward: follow the address.
   const courseRef = useRef(course);
   courseRef.current = course;
   useEffect(() => {
     const onPop = () => {
-      const params = new URLSearchParams(window.location.search);
-      const id = params.get(SHARE_PARAM);
-      setDetailId(params.get(SHOP_PARAM));
-      if (!id) setCourse(null);
-      else if (id !== courseRef.current?.id) openCourse(id);
+      const r = readRoute();
+      setDetailId(r.shop);
+      setShowMine(r.me !== null);
+      if (r.me) setMePlace({ tab: r.me, page: r.page });
+      if (!r.course) {
+        setCourse(null);
+        setWalking(false);
+      } else if (r.course !== courseRef.current?.id) {
+        openCourse(r.course, { variant: r.variant, walk: r.walk, keep: true });
+      } else {
+        setVariantIndex(r.variant);
+        setWalking(r.walk);
+      }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -417,7 +434,9 @@ export function App() {
                 planner.runSaved(g);
               }}
               notice={loginNotice}
-              onOpenCourse={openCourse}
+              place={mePlace}
+              onPlace={(tab, page) => setMePlace((x) => (x.tab === tab && x.page === page ? x : { tab, page }))}
+              onOpenCourse={(id) => openCourse(id)}
               onClose={() => setShowMine(false)}
               onOpenShop={(id, at) => {
                 if (at) setFocusShop(at);

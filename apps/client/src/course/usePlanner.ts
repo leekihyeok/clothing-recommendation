@@ -1,8 +1,9 @@
 import { useMutation, useQuery } from '@apollo/client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { graphql } from '../gql';
 import { t } from '../i18n';
 import type { ParsePromptMutation, PlanCourseMutation } from '../gql/graphql';
+import { readDraft, writeDraft } from '../draft';
 
 const CatalogDoc = graphql(`
   query CourseCatalog {
@@ -125,22 +126,25 @@ export const MAX_STOPS = 20;
 /** The request form state, the planCourse call, and the AI helpers that fill the form from text or a photo. */
 export function usePlanner(onPlanned: (course: PlannedCourse) => void) {
   const catalog = useQuery(CatalogDoc).data?.catalog;
-  const [styles, setStyles] = useState<string[]>([]);
-  const [stopCount, setStopCount] = useState<number | null>(null);
-  const [maxStops, setMaxStops] = useState(false);
-  const [timeBudget, setTimeBudget] = useState<number | null>(null);
-  const [budget, setBudget] = useState('any');
-  const [items, setItems] = useState<string[]>([]);
-  const [skipVisited, setSkipVisited] = useState(false);
-  const [withCafe, setWithCafe] = useState(false);
-  const [withFood, setWithFood] = useState(false);
-  const [mustShops, setMustShops] = useState<MustShop[]>([]);
-  const [gender, setGender] = useState<Gender>('any');
-  const [startAt, setStartAt] = useState<string | null>(null);
-  const [endBy, setEndBy] = useState<string | null>(null);
-  const [end, setEnd] = useState<EndChoice>(LAST);
-  const [brands, setBrands] = useState<BrandChoice[]>([]);
-  const [weather, setWeather] = useState(true);
+  // The form as it was before a reload (this tab only, draft.ts); a field it lacks starts as usual.
+  const [d] = useState(() => readDraft<Partial<Form>>('form') ?? {});
+  const [styles, setStyles] = useState<string[]>(d.styles ?? []);
+  const [stopCount, setStopCount] = useState<number | null>(d.stopCount ?? null);
+  const [maxStops, setMaxStops] = useState(d.maxStops ?? false);
+  const [timeBudget, setTimeBudget] = useState<number | null>(d.timeBudget ?? null);
+  const [budget, setBudget] = useState(d.budget ?? 'any');
+  const [items, setItems] = useState<string[]>(d.items ?? []);
+  const [skipVisited, setSkipVisited] = useState(d.skipVisited ?? false);
+  const [withCafe, setWithCafe] = useState(d.withCafe ?? false);
+  const [withFood, setWithFood] = useState(d.withFood ?? false);
+  const [mustShops, setMustShops] = useState<MustShop[]>(d.mustShops ?? []);
+  const [gender, setGender] = useState<Gender>(d.gender ?? 'any');
+  // A start time already past when the page comes back is "now" again.
+  const [startAt, setStartAt] = useState<string | null>(d.startAt && new Date(`${d.startAt}:00+09:00`).getTime() > Date.now() ? d.startAt : null);
+  const [endBy, setEndBy] = useState<string | null>(d.endBy ?? null);
+  const [end, setEnd] = useState<EndChoice>(d.end ?? LAST);
+  const [brands, setBrands] = useState<BrandChoice[]>(d.brands ?? []);
+  const [weather, setWeather] = useState(d.weather ?? true);
   const [locating, setLocating] = useState(false);
   // A quiet line about how the last plan went that isn't an error ("위치를 확인하지 못해서 지도 가운데서 짰어요").
   const [notice, setNotice] = useState<string | null>(null);
@@ -157,6 +161,7 @@ export function usePlanner(onPlanned: (course: PlannedCourse) => void) {
   const lastRun = useRef<(() => Promise<void>) | null>(null);
 
   const current = (): Form => ({ styles, stopCount, maxStops, timeBudget, budget, items, skipVisited, withCafe, withFood, mustShops, gender, startAt, endBy, end, brands, weather });
+  useEffect(() => writeDraft('form', current()), [styles, stopCount, maxStops, timeBudget, budget, items, skipVisited, withCafe, withFood, mustShops, gender, startAt, endBy, end, brands, weather]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function apply(f: Form) {
     setStyles(f.styles);

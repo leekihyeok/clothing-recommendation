@@ -7,8 +7,18 @@ const isPhone = () => window.matchMedia('(max-width: 767.98px)').matches;
 
 /**
  * What the marks on the map mean. Shop dots by kind (백화점·몰 are squares), or, while a course is shown, the start,
- * the numbered stops and the walking line. Every colour comes with its name; phones start folded to keep the map.
+ * the numbered stops and the walking line (and, with 주변 가게 on, the shop types again). Every colour comes with its name; phones start folded to keep the map.
  */
+/** One row per shop type, its colour and name (백화점·몰 a square). Faint like the nearby pins around a course. */
+function shopTypes(faint = false) {
+  return SHOP_CATEGORIES.map((c) => (
+    <li key={c.id} className="legend-type">
+      <span className={`legend-dot${c.id === 'complex' ? ' is-square' : ''}${faint ? ' is-faint' : ''}`} style={{ background: c.color }} />
+      {c.label}
+    </li>
+  ));
+}
+
 export function MapLegend({ mode, nearby = false }: { mode: 'shops' | 'course'; nearby?: boolean }) {
   const [open, setOpen] = useState(() => !isPhone());
   return (
@@ -34,18 +44,14 @@ export function MapLegend({ mode, nearby = false }: { mode: 'shops' | 'course'; 
                 <span className="legend-break" />{t('카페·맛집 (넣었을 때)', 'Café / food (if added)')}
               </li>
               {nearby && (
-                <li>
-                  <span className="legend-dot is-faint" style={{ background: 'var(--ink-3)' }} />{t('주변 가게 (누르면 넣기)', 'Shops nearby (tap to add)')}
-                </li>
+                <>
+                  <li className="legend-sub">{t('주변 가게 · 누르면 넣기', 'Shops nearby · tap to add')}</li>
+                  {shopTypes(true)}
+                </>
               )}
             </>
           ) : (
-            SHOP_CATEGORIES.map((c) => (
-              <li key={c.id}>
-                <span className={`legend-dot${c.id === 'complex' ? ' is-square' : ''}`} style={{ background: c.color }} />
-                {c.label}
-              </li>
-            ))
+            shopTypes()
           )}
         </ul>
       )}

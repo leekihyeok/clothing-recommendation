@@ -1,5 +1,6 @@
 import { ArrowRight, Camera, Sparkle, Warning } from '@phosphor-icons/react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { readDraft, writeDraft } from '../draft';
 import type { Origin, Planner } from './usePlanner';
 import { getLang, t } from '../i18n';
 
@@ -25,7 +26,9 @@ export interface Echo {
 
 /** "어떤 코스를 원하세요?" — free text (and a photo) filled into the form by AI, then planned right away. */
 export function PromptBox({ planner, onRegion, fallbackOrigin, onEcho }: Props) {
-  const [text, setText] = useState('');
+  // What was typed, kept through a reload (this tab only).
+  const [text, setText] = useState(() => readDraft<string>('prompt') ?? '');
+  useEffect(() => writeDraft('prompt', text), [text]);
   const [echo, setEcho] = useState<{ summary: string; notes: string[] } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 

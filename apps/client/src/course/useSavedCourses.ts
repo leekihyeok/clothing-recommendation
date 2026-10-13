@@ -34,7 +34,7 @@ const CourseDoc = graphql(`
 
 const MyCoursesDoc = graphql(`
   query MyCourses {
-    myCourses(limit: 8) {
+    myCourses(limit: 30) {
       id createdAt startName
       request { styles regionName }
       variants { stops { order } }
