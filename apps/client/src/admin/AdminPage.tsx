@@ -56,7 +56,7 @@ const ACTION = (): Record<string, string> => ({
 const TARGET_MS: Record<string, number> = { plan: 2000, edit: 1500, parse_text: 5000, parse_photo: 5000, edit_text: 5000 };
 const OP = (): Record<string, string> => ({
   break: t('카페·맛집 넣기·빼기', 'Add/remove café or food'), replace: t('다른 가게로', 'Swap shop'), remove: t('빼기', 'Remove'),
-  move: t('순서 바꾸기', 'Reorder'), add: t('더 넣기', 'Add more'), replan: t('다시 짜기', 'Re-plan'), text: t('말로 고치기', 'Edit by text'),
+  move: t('순서 바꾸기', 'Reorder'), first: t('1번으로', 'Make stop 1'), swap: t('서로 바꾸기', 'Swap two'), reverse: t('거꾸로', 'Reverse'), add: t('더 넣기', 'Add more'), replan: t('다시 짜기', 'Re-plan'), text: t('말로 고치기', 'Edit by text'),
 });
 
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '–');

@@ -138,3 +138,26 @@ def test_name_variants_and_address_spot():
     assert road_spot("서울특별시 성동구 왕십리로4길 10-20") == "왕십리로4길 10-20"
     assert road_spot("서울 성동구 성수동2가 280") is None
     assert FOOD_TITLE.search("성수 빙수 맛집") and not FOOD_TITLE.search("와이드 바지 코디")
+
+
+def test_same_brand_store_across_spellings():
+    from pipeline.merge_dupes import same_brand_store
+
+    aliases = sorted(
+        [("supreme", "슈프림"), ("슈프림", "슈프림"), ("covernat", "커버낫"), ("커버낫", "커버낫"), ("헤지스", "hazzys"),
+         ("뉴발란스", "newbalance"), ("시에라디자인", "시에라디자인"), ("아레나", "아레나"), ("아더에러", "adererror")],
+        key=lambda x: -len(x[0]),
+    )
+    words = sorted({"점", "직영점", "플래그십", "플래그쉽", "스토어", "코리아", "도산", "성수", "종로", "신촌", "라움이스트"}, key=lambda w: -len(w))
+
+    def same(a, b):
+        return same_brand_store(a, b, aliases, words)
+
+    assert same("Supreme도산", "슈프림")
+    assert same("커버낫성수플래그십", "커버낫 플래그쉽 성수점")
+    assert same("시에라디자인종로5가점", "시에라디자인종로5가 직영점")
+    # another line, another shop; units and branch numbers too
+    assert not same("헤지스골프 라움이스트점", "헤지스ACC 라움이스트점")
+    assert not same("뉴발란스 신촌직영점", "뉴발란스키즈 직영신촌점")
+    assert not same("아레나스퀘어4096호", "아레나스퀘어9014호")
+    assert not same("아더에러 시그니피컨트 성수", "아더에러 오브샵 성수")

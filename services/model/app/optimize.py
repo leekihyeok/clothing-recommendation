@@ -47,6 +47,9 @@ class OptimizeRequest(BaseModel):
     end: LatLng | None = None  # finish here (walk on from the last shop); None = the course ends at its last shop
     # Rain, snow, heat or cold: walking costs this many times more in every variant (shorter walks between shops).
     distance_scale: float = Field(1.0, ge=0.5, le=5)
+    # The course starts at this shop (the store of a brand asked for), the rest ordered from there. Dropped when the
+    # course can't start there (closed then, or past the time budget).
+    first_id: str | None = None
 
 
 class Leg(BaseModel):
@@ -105,6 +108,7 @@ class Problem:
     # Pinned shops: the walk may wait longer than MAX_WAIT_MIN for them to open (the user asked for them; the card
     # says when it opens) instead of dropping them.
     patient: frozenset[int] = frozenset()
+    first: int | None = None  # node every route starts with (OptimizeRequest.first_id)
     _walks: dict = field(default_factory=dict, repr=False)
 
     def shops(self) -> range:
@@ -163,6 +167,10 @@ class Problem:
     def feasible(self, route: list[int]) -> bool:
         return len(route) <= self.stop_count and self.minutes(route) <= self.budget + 1e-9
 
+    def fixed(self, route: list[int]) -> int:
+        """How many stops at the front of the route stay put: 1 when it starts with the fixed first shop."""
+        return 1 if self.first is not None and route and route[0] == self.first else 0
+
     def objective(self, route: list[int]) -> float:
         # Standing at a closed door counts against a route too, so a shop that opens later is visited later.
         w = self._walk(route) if self.window else None
@@ -181,7 +189,7 @@ def best_insertion(p: Problem, route: list[int], node: int) -> tuple[float, list
     base_value = sum(p.value[x] for x in route) + p.value[node]
     dwell = sum(p.dwell[x] for x in route) + p.dwell[node]
     best_score, best_pos = -math.inf, -1
-    for pos in range(n + 1):
+    for pos in range(p.fixed(route), n + 1):
         prev = route[pos - 1] if pos else 0
         nxt = route[pos] if pos < n else p.end
         added = dist[prev][node] + (dist[node][nxt] - dist[prev][nxt] if nxt is not None else 0.0)
@@ -224,7 +232,7 @@ def two_opt(p: Problem, route: list[int]) -> list[int]:
     improved = True
     while improved:
         improved = False
-        for i in range(len(route) - 1):
+        for i in range(p.fixed(route), len(route) - 1):
             for j in range(i + 1, len(route)):
                 cand = route[:i] + route[i : j + 1][::-1] + route[j + 1 :]
                 # Better by the same measure local_search uses (shorter, or less waiting for a shop to open — judging
@@ -241,7 +249,7 @@ def local_search(p: Problem, route: list[int]) -> list[int]:
         improved = False
         current = p.objective(route)
         unused = [n for n in p.shops() if n not in route]
-        for out in list(route):
+        for out in route[p.fixed(route):]:
             base = [n for n in route if n != out]
             for new in unused:
                 r = best_insertion(p, base, new)
@@ -252,7 +260,7 @@ def local_search(p: Problem, route: list[int]) -> list[int]:
                 break
         if not improved and len(route) < p.stop_count:
             # Drop one stop and refill greedily: frees time to fit two closer shops instead of one far one.
-            for out in [None, *route]:
+            for out in [None, *route[p.fixed(route):]]:
                 grown = greedy(p, [n for n in route if n != out])
                 if p.objective(grown) > current + 1e-9:
                     route, improved = two_opt(p, grown), True
@@ -271,9 +279,9 @@ def solve(p: Problem, beam: int | None = None, polish: int = 5) -> list[int]:
         beam = 30 if p.stop_count <= 6 else 10 if p.stop_count <= 12 else 4
     if p.stop_count > 12:
         polish = min(polish, 2)  # fewer local-search rounds on the best routes of a long course
-    level = [[]]
-    found: dict[frozenset, list[int]] = {}
-    for _ in range(p.stop_count):
+    level = [[p.first]] if p.first is not None else [[]]
+    found: dict[frozenset, list[int]] = {frozenset(level[0]): level[0]} if level[0] and p.feasible(level[0]) else {}
+    for _ in range(p.stop_count - len(level[0])):
         nxt: dict[frozenset, list[int]] = {}
         for route in level:
             for node in p.shops():
@@ -322,6 +330,7 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
     tail = [0.0] if end is not None else []
     courses: list[CourseResult] = []
     seen: set[tuple[str, ...]] = set()
+    first = next((i + 1 for i, c in enumerate(req.candidates) if c.id == req.first_id), None)
     for variant, km_weight in VARIANTS.items():
         p = Problem(
             dist=dist,
@@ -334,8 +343,13 @@ def optimize(req: OptimizeRequest) -> OptimizeResponse:
             window=window,
             end=end,
             patient=frozenset(i + 1 for i, c in enumerate(req.candidates) if c.must),
+            first=first,
         )
         route = solve(p)
+        if first is not None and (not route or route[0] != first):
+            p.first = None  # can't start there (closed then, or too far for the time): the best course without it
+            p._walks.clear()
+            route = solve(p)
         key = tuple(route)
         if variant != "recommended" and key in seen:
             continue  # same as a course we already have

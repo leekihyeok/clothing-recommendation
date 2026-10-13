@@ -75,6 +75,17 @@ type BrandRef {
   shops: Int!
 }
 
+"""말한 브랜드가 모인 지역 (가장 잘 맞는 순)"""
+type BrandRegion {
+  """이 지역에서 볼 수 있는 브랜드 (보여 줄 이름)"""
+  brands: [String!]!
+  id: ID!
+  name: String!
+
+  """그 브랜드를 다루는 가게 수"""
+  shops: Int!
+}
+
 """코스 중간에 쉬어 가는 곳: 카페나 맛집 (가게 목록과 별도, 카카오 장소 검색)"""
 type BreakStop {
   address: String
@@ -162,7 +173,9 @@ type Course {
   weather: CourseWeather
 }
 
-"""코스 고치기 한 번. op: remove | replace | move | add | replan"""
+"""
+코스 고치기 한 번. op: remove | replace | move | first | swap | reverse | add | replan
+"""
 input CourseEditInput {
   """replace/add: 이미 거절한 가게 (다시 추천하지 않음)"""
   avoid: [ID!]
@@ -177,7 +190,7 @@ input CourseEditInput {
   """replace/add: 이 가게로 (이름으로 찾았거나 지도·가게 정보에서 고른 가게)"""
   shopId: ID
 
-  """move: 옮길 자리"""
+  """move: 옮길 자리 / swap: 맞바꿀 가게 번호"""
   toOrder: Int
 
   """low | mid | high"""
@@ -992,6 +1005,9 @@ type ResolvedRequest {
   """이 지도 화면 안에서만 짰으면 그 영역 (다시 짤 때도 같은 영역)"""
   bounds: MapArea
 
+  """브랜드가 모인 지역 (첫 번째가 가장 잘 맞음). 근처에 그 브랜드가 없을 때만"""
+  brandRegions: [BrandRegion!]
+
   """찾은 브랜드"""
   brands: [BrandRef!]!
   budget: String!
@@ -1022,6 +1038,9 @@ type ResolvedRequest {
   """지역을 골랐으면 그 지역 (같은 조건으로 다시 짤 때)"""
   regionId: ID
   regionName: String
+
+  """지역을 정하지 않아서 말한 브랜드가 모인 지역을 골라 짰다"""
+  regionPicked: Boolean
 
   """출발점으로 돌아오는 코스"""
   roundTrip: Boolean

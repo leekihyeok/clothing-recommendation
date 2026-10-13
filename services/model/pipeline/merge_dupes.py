@@ -7,6 +7,9 @@ are bridged:
   - Latin letters read out the Korean way: EQL → 이큐엘, MLB → 엠엘비
   - Korean romanized (Revised Romanization, simplified): 모노하 → monoha = "MO-NO-HA"
   - or close after that (similarity ≥ 0.82): 무신사 스탠다드 ↔ MUSINSA STANDARD
+  - or both start with the same brand from the brand dictionary and the rest is only places and store words:
+    "Supreme도산" ↔ "슈프림" (a loanword doesn't romanize back: 슈프림 → syupeurim), "커버낫성수플래그십" ↔
+    "커버낫 플래그쉽 성수점". A product line or a unit keeps them apart: 헤지스골프 / 헤지스ACC, 뉴발란스키즈.
 Branch words ("성수점"), brackets, spaces and case are ignored. Department stores, malls and market stalls are left
 alone (many shops share one address there).
 
@@ -22,6 +25,7 @@ import json
 import re
 from difflib import SequenceMatcher
 
+from pipeline.brands import place_words
 from pipeline.db import connect, pipeline_run
 
 SAME_SPOT_M = 15
@@ -98,6 +102,62 @@ def same_name(a: str, b: str) -> str | None:
     return None
 
 
+# What may follow a brand in one store's name and not make it another shop: store words and places.
+STORE_WORDS = {
+    "플래그십스토어", "플래그쉽스토어", "플래그십", "플래그쉽", "flagship", "스토어", "store", "직영점", "직영", "대리점", "본점",
+    "매장", "코리아", "korea", "서울", "seoul", "점",
+}
+# Places shops are named after that aren't a station or a 동 (place_words has those).
+EXTRA_PLACES = {"도산", "도산공원", "가로수", "가로수길", "로데오"}
+
+
+def brand_split(name: str, aliases: list[tuple[str, str]]) -> tuple[str, str] | None:
+    """(brand key, the rest) for a core name starting with a brand spelling, the longest one that fits."""
+    for alias, key in aliases:
+        if name.startswith(alias):
+            return key, name[len(alias):]
+    return None
+
+
+def only_branch(rest: str, words: list[str]) -> bool:
+    """Whether what follows the brand is only places and store words ("도산", "성수플래그십", "종로5가점")."""
+    rest = re.sub(r"\d+가", "", rest)  # 종로5가 (the digits are compared on the whole name)
+    while rest:
+        w = next((w for w in words if rest.startswith(w) or rest.endswith(w)), None)
+        if not w:
+            return False
+        rest = rest[len(w):] if rest.startswith(w) else rest[: -len(w)]
+    return True
+
+
+def same_brand_store(a: str, b: str, aliases: list[tuple[str, str]], words: list[str]) -> str | None:
+    """Two names for one brand store: the same brand, then nothing but where it is (see the module docstring)."""
+    ca, cb = core(a), core(b)
+    if ca == cb or re.sub(r"\D", "", ca) != re.sub(r"\D", "", cb):
+        return None
+    sa, sb = brand_split(ca, aliases), brand_split(cb, aliases)
+    if not sa or not sb or sa[0] != sb[0]:
+        return None
+    return f"brand {sa[0]}" if only_branch(sa[1], words) and only_branch(sb[1], words) else None
+
+
+def brand_aliases(conn) -> list[tuple[str, str]]:
+    """Every brand spelling (Hangul 2+, Latin 3+ letters) with its key, longest first."""
+    out = [
+        (alias, key)
+        for key, aliases in conn.execute("SELECT key, aliases FROM brands").fetchall()
+        for alias in aliases or []
+        if len(alias) >= (2 if re.search(r"[가-힣]", alias) else 3)
+    ]
+    return sorted(out, key=lambda x: -len(x[0]))
+
+
+def branch_words(conn) -> list[str]:
+    """Store words and places, longest first (so "플래그십스토어" goes before "스토어")."""
+    regions = {p for (name,) in conn.execute("SELECT name FROM regions").fetchall() for p in name.split("·")}
+    return sorted(STORE_WORDS | EXTRA_PLACES | place_words(conn) | regions, key=lambda w: -len(w))
+
+
 def pairs(conn) -> list[tuple]:
     return conn.execute(
         f"""SELECT a.id, a.name, b.id, b.name,
@@ -170,11 +230,17 @@ def merge(conn, keep: int, gone: int) -> None:
 def run(dry_run: bool) -> dict:
     with connect() as conn, pipeline_run(conn, "merge_dupes") as stats:
         found = []
+        aliases, words = brand_aliases(conn), branch_words(conn)
         for a_id, a_name, b_id, b_name, a_shown, b_shown in pairs(conn):
-            how = same_name(a_shown, b_shown) or same_name(a_name, b_name)
+            how = (
+                same_name(a_shown, b_shown)
+                or same_name(a_name, b_name)
+                or same_brand_store(a_shown, b_shown, aliases, words)
+                or same_brand_store(a_name, b_name, aliases, words)
+            )
             if how:
                 found.append((a_id, a_shown, b_id, b_shown, how))
-        stats.update(pairs_checked=0, found=len(found), merged=0, examples=[f"{a} = {b} ({how})" for _, a, _, b, how in found[:25]])
+        stats.update(pairs_checked=0, found=len(found), merged=0, examples=[f"{a} = {b} ({how})" for _, a, _, b, how in found[:80]])
         if dry_run:
             conn.rollback()
             return stats

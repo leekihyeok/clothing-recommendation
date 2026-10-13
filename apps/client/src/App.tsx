@@ -103,6 +103,8 @@ export function App() {
     setWalking(false);
     sheet.setSnap('half'); // phones: the route on the map above, the list below
     setVariantIndex(0);
+    // No place was chosen and the brands asked for picked the region: show it as chosen (map, buttons, next plans).
+    if (c.request.regionPicked && c.request.regionId) setRegionId(c.request.regionId);
     setCourse(c);
     body.current?.scrollTo({ top: 0 });
   });
@@ -283,6 +285,7 @@ export function App() {
             card.focus({ preventScroll: true });
           }, 80);
         }}
+        onStopSwap={course && !walking && !editor.busy ? (from, to) => editor.apply({ op: 'swap', order: from, toOrder: to }) : undefined}
         onCancelPick={() => {
           setPickMode(null);
           sheet.setSnap('half');
@@ -481,6 +484,10 @@ export function App() {
               onCourseId={(id) => setCourse((c) => (c ? { ...c, id, shared: false } : c))}
               regions={regions}
               onOpenCourse={openCourse}
+              onBrandRegion={(id) => {
+                setRegionId(id);
+                planner.run({ regionId: id }, planner.form(), 'buttons');
+              }}
               onContinue={(id) => {
                 const from = course.id;
                 setEcho(null);

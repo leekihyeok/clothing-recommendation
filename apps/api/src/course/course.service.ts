@@ -17,7 +17,7 @@ import { inLang } from '../infra/translations';
 import { noteEn, reasonEn, tasteNoteEn, VARIANT_LABEL_EN, weatherEn } from './localize';
 import { BrandRef, brandsByKey } from '../shops/brands';
 import { DISPLAY_NAME_SQL } from '../shops/shops.resolver';
-import { BreakStop, Course, CourseEditInput, CourseEditResult, CourseLink, CourseRequestInput, CourseStop, CourseVariant, CourseWeather, EndInput, Leg, PinnedShop } from './course.model';
+import { BrandRegion, BreakStop, Course, CourseEditInput, CourseEditResult, CourseLink, CourseRequestInput, CourseStop, CourseVariant, CourseWeather, EndInput, Leg, PinnedShop } from './course.model';
 import { type Clock, clockAt, closedOnArrival, dayHours, hhmm, MAX_WAIT_MIN, minutesUntil, storedClock, windowFor } from './hours';
 
 const STYLE_LABEL = Object.fromEntries(STYLES.map((s) => [s.id, s.label]));
@@ -159,6 +159,9 @@ const SEARCH_RADIUS_M = [1200, 2000];
 const MAX_BOUNDS_DEG = 0.12;
 // The start station is the one nearest the shops the course will most likely use (the top candidates' centre).
 const STATION_NEAR_TOP = 10;
+// A brand store known only from the public data (no Kakao listing, no posts): its name claims a brand nobody has
+// confirmed ("샤넬", "발렌티노" registered at some address), so it counts this much in a course. Asked for by name, it's in.
+const UNVERIFIED_BRAND_FACTOR = 0.5;
 const STATION_RADIUS_M = 1200;
 
 interface Box { swLat: number; swLng: number; neLat: number; neLng: number }
@@ -256,6 +259,18 @@ function onePerName(shops: Scored[], prefer: Set<string> = new Set()): Scored[] 
   }
   return [...best.values()];
 }
+
+/** Letters and digits only, lower case: "Supreme 도산" → "supreme도산". */
+const squash = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/** A brand store whose name starts with the brand ("Supreme도산", "아더에러 성수") is that brand's own store. */
+function namedFor(name: string, b: BrandRef): boolean {
+  const n = squash(name);
+  return [b.name, b.nameEn, b.key].some((x) => !!x && squash(x).length >= 2 && n.startsWith(squash(x)));
+}
+
+/** The brand's own store, not a select shop that stocks it. */
+const ownStore = (s: { category: string; brand_keys: string[] | null }, key: string) => s.category === 'brand' && !!s.brand_keys?.includes(key);
 
 /**
  * One store per brand: 아더에러 has several stores in 성수 alone, and a course of four of them (or two MLB stores)
@@ -467,6 +482,9 @@ interface StoredRequest {
   weather?: CourseWeather;
   groupId?: string;
   groupNames?: string[];
+  /** the region was picked for the brands asked for (no place chosen) */
+  regionPicked?: boolean;
+  brandRegions?: BrandRegion[];
 }
 
 interface CourseRow {
@@ -498,6 +516,8 @@ function toCourse(r: CourseRow): Course {
       skipVisited: q.skipVisited === true,
       bounds: q.bounds,
       ignoreWeather: q.ignoreWeather === true,
+      regionPicked: q.regionPicked,
+      brandRegions: q.brandRegions,
       groupId: q.groupId,
       groupNames: q.groupNames,
     },
@@ -639,6 +659,10 @@ export class CourseService {
 
     // Brands asked for ("아더에러 파는 데"): shops carrying them move well up; their cards say so.
     const brands = await brandsByKey(this.db.pool, [...new Set((input.brands ?? []).map((b) => b.trim()).filter(Boolean))].slice(0, 5));
+    // Brands asked for but no place chosen (the map as it happened to be): plan where those brands are. From "내 위치"
+    // the start stays, and the regions are only offered when the brands aren't nearby.
+    const brandPick = brands.length && !input.continueFrom ? await this.brandRegionsFor(input, brands, stopCount) : undefined;
+    if (brandPick?.picked) input = { ...input, origin: { regionId: brandPick.regions[0].id } };
     const pickedStart = input.origin.point && !input.origin.regionId && !input.origin.gps && GENERIC_PLACE.has(input.origin.label?.trim() ?? '__');
     const pickedName = pickedStart ? await this.nameOfPoint(input.origin.point!) : undefined;
     const resolved = await this.resolveOrigin(pickedName ? { ...input, origin: { ...input.origin, label: pickedName } } : input);
@@ -665,6 +689,13 @@ export class CourseService {
     const farNote = far.length ? `${topic(far.join('·'))} 출발점에서 멀어서 넣지 않았어요` : undefined;
     const gender = GENDERS.has(input.gender ?? '') ? input.gender : undefined;
     const rows = pool.filter((r) => mustIds.includes(r.id) || (keep(r, personal, skipVisited, clock, timeBudgetMin) && genderFit(r, gender) > 0));
+    // A brand's store known only by its name (no brand link yet) counts as that brand's store, first among its keys so
+    // one-store-per-brand sees it. Only shops on Kakao: a public-data registration called "슈프림" in 상봉동, with no
+    // listing or posts, is a shop of that name, not the brand's store (pipeline.brands links Kakao names the same way).
+    for (const r of rows) {
+      if (r.category !== 'brand' || !r.on_kakao) continue;
+      for (const b of brands) if (!r.brand_keys?.includes(b.key) && namedFor(r.name, b)) r.brand_keys = [b.key, ...(r.brand_keys ?? [])];
+    }
     if (!rows.length) {
       throw new BadRequestException(
         bounds ? '지금 지도 화면 안에는 추천할 가게가 없어요. 지도를 옮기거나 조금 넓혀 주세요' : '이 근처에서 추천할 가게를 찾지 못했어요. 다른 지역을 골라 주세요',
@@ -691,17 +722,21 @@ export class CourseService {
       const s = this.score(r, styles, budget, items, personal, brands);
       // Indoors counts for as much as it fits: a department store doesn't become a vintage stop because it rains.
       const indoor = applyWeather && r.kind === 'complex' ? INDOOR_BONUS * styleFit(s) : 0;
-      return mustIds.includes(r.id) ? s : { ...s, value: Math.min(1, s.value * genderFit(r, gender) + indoor) };
+      const unverified = r.category === 'brand' && !r.on_kakao && !r.matched_posts ? UNVERIFIED_BRAND_FACTOR : 1;
+      return mustIds.includes(r.id) ? s : { ...s, value: Math.min(1, s.value * genderFit(r, gender) * unverified + indoor) };
     });
-    // Each brand asked for is in every course like a pin: its best shop here (on "다른 코스", the best one not shown
-    // yet, so the brand stays but the shop can change). Pinned shops come first; a pinned shop carrying the brand counts.
+    // Each brand asked for is in every course like a pin: its own store here when there is one (슈프림 asked for →
+    // the Supreme store, not a select shop stocking it), else the best shop carrying it. On "다른 코스" the best one not
+    // shown yet, so the brand stays but the shop can change. A pinned shop of the same kind already covers it.
     const brandPicks: string[] = [];
     const freshValue = (s: Scored) => (seen.has(s.id) ? s.value * SEEN_FACTOR : s.value);
     for (const b of brands) {
       if (mustIds.length + brandPicks.length >= stopCount) break;
-      const carries = (id: string) => fresh.find((f) => f.id === id)?.brand_keys?.includes(b.key);
-      if ([...mustIds, ...brandPicks].some(carries)) continue;
-      const best = fresh.filter((s) => s.brand_keys?.includes(b.key)).sort((x, y) => freshValue(y) - freshValue(x))[0];
+      const carriers = fresh.filter((s) => s.brand_keys?.includes(b.key));
+      const own = carriers.filter((s) => ownStore(s, b.key));
+      const options = own.length ? own : carriers;
+      if ([...mustIds, ...brandPicks].some((id) => options.some((s) => s.id === id))) continue;
+      const best = options.sort((x, y) => freshValue(y) - freshValue(x))[0];
       if (best) brandPicks.push(best.id);
     }
     let indoorPicked = false;
@@ -737,9 +772,18 @@ export class CourseService {
     const scored = [...ranked.filter((s) => must.has(s.id)), ...ranked.filter((s) => !must.has(s.id)).slice(0, limit)];
     const byId = new Map(scored.map((s) => [s.id, s]));
 
+    // The first brand asked for that has its own store here: the walk starts there ("슈프림" → the Supreme store first,
+    // not a select shop stocking it), the rest ordered from it. A brand only stocked by other shops isn't put first.
+    const first = brands
+      .map((b) => brandPicks.map((id) => byId.get(id)).find((s) => s && ownStore(s, b.key)))
+      .find((s): s is Scored => !!s);
+
     // A region starts at the station nearest the shops this course will most likely use, not the area's centre
-    // (동대문·동묘 for vintage → 동묘앞역, not 동대문역).
-    if (regionId) {
+    // (동대문·동묘 for vintage → 동묘앞역, not 동대문역) — or nearest that brand store when the walk starts there.
+    if (regionId && first) {
+      const station = await this.stationNear(first);
+      if (station) ({ origin, startName } = { origin: { lat: station.lat, lng: station.lng }, startName: station.name });
+    } else if (regionId) {
       const top = scored.slice(0, STATION_NEAR_TOP);
       const w = top.reduce((a, s) => a + s.value, 0) || 1;
       const centre = { lat: top.reduce((a, s) => a + s.lat * s.value, 0) / w, lng: top.reduce((a, s) => a + s.lng * s.value, 0) / w };
@@ -753,7 +797,9 @@ export class CourseService {
       ? { ...input.end, label: (await this.nameOfPoint(input.end.point)) ?? input.end.label }
       : input.end;
     const end = resolveEnd(endInput, origin, startName);
-    const res = await this.optimize(origin, scored, stopCount, timeBudgetMin, countChosen, must, { clock, end, distanceScale: applyWeather ? BAD_WEATHER_WALK : 1 });
+    const res = await this.optimize(origin, scored, stopCount, timeBudgetMin, countChosen, must, {
+      clock, end, distanceScale: applyWeather ? BAD_WEATHER_WALK : 1, firstId: first?.id,
+    });
     const weather = forecast ? courseWeather(forecast, applyWeather, indoorPicked) : undefined;
 
     const styleIds = styles.map((x) => x.id);
@@ -803,6 +849,8 @@ export class CourseService {
       skipVisited,
       bounds,
       ignoreWeather,
+      regionPicked: brandPick?.picked || undefined,
+      brandRegions: brandPick?.regions,
     };
     // "다른 지역으로 이어 가기": how to get from the previous course's last shop to this one's start.
     const link = input.continueFrom ? await this.linkFrom(input.continueFrom, origin, startName) : undefined;
@@ -1046,6 +1094,7 @@ export class CourseService {
         regionName: place(q.regionName),
         tasteNote: tasteNoteEn(q.tasteNote),
         brands: q.brands.map((b) => ({ ...b, name: b.nameEn ?? brandsEn.get(b.name) ?? b.name })),
+        brandRegions: q.brandRegions && (await this.brandRegionsEn(q.brandRegions, q.brands, brandsEn)),
       },
       variants: await Promise.all(c.variants.map((v) => this.localizeVariant(v, q.styles, q.startAt, brandsEn, pre))),
     };
@@ -1205,8 +1254,13 @@ export class CourseService {
         // The only shop of that name may be in another neighbourhood: say so, the walk gets long.
         if ((hit.distanceM ?? 0) > FAR_PICK_M) farNote = ` (코스에서 ${((hit.distanceM ?? 0) / 1000).toFixed(1)}km 떨어진 곳이라 걷는 길이 길어져요)`;
       }
+      // A swap's other number is pinned to its shop too, like order: earlier ops may have moved it.
+      const swapWith = op.op === 'swap' && op.to_order ? ids.indexOf(original[op.to_order - 1] ?? '') + 1 : 0;
+      if (op.op === 'swap' && !swapWith) continue;
+      // "4번을 맨 앞으로": same as the card's 1번으로 — that shop first, the rest re-ordered from it.
+      const opName = op.op === 'move' && op.to_order === 1 ? 'first' : op.op;
       const edit: CourseEditInput = {
-        op: op.op, order, toOrder: op.to_order ?? undefined, shopId: pickedId,
+        op: opName, order, toOrder: op.op === 'swap' ? swapWith : (op.to_order ?? undefined), shopId: pickedId,
         wantCategory: op.want_category ?? undefined, wantStyle: op.want_style ?? undefined,
         wantItem: op.want_item ?? undefined, wantBudget: op.want_budget ?? undefined, prefer: op.prefer ?? undefined,
       };
@@ -1399,6 +1453,28 @@ export class CourseService {
         ids.splice(to, 0, id);
         return { ids, message: `${obj(this.nameOf(ctx, id))} ${to + 1}번으로 옮겼어요` };
       }
+      case 'first': {
+        // "1번으로": that shop is walked to first, then the rest in the shortest order from it (and on to the end).
+        const i = at(edit.order);
+        const [id] = ids.splice(i, 1);
+        const rest = shortestOrder(this.pos(ctx, id), ids.map((x) => ({ id: x, ...this.pos(ctx, x) })), ctx.req.end);
+        const changed = rest.some((x, k) => x !== ids[k]);
+        const message = `${obj(this.nameOf(ctx, id))} 1번으로 옮겼어요`;
+        return { ids: [id, ...rest], message: changed ? `${message} · 걷는 순서도 다시 맞췄어요` : message };
+      }
+      case 'swap': {
+        // Two stops trade places (a number dropped on another on the map); the rest stay where they are.
+        const i = at(edit.order);
+        const j = at(edit.toOrder);
+        if (i === j) return { ids, message: '그대로예요' };
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        return { ids, message: `${i + 1}번 ${this.nameOf(ctx, ids[j])} ↔ ${j + 1}번 ${this.nameOf(ctx, ids[i])} 순서를 바꿨어요` };
+      }
+      case 'reverse': {
+        if (ids.length < 2) return { ids, message: '그대로예요' };
+        ids.reverse();
+        return { ids, message: '코스를 거꾸로 걸어요' };
+      }
       case 'replace': {
         const i = at(edit.order);
         const pick = edit.shopId ? await this.chosen(ctx, ids, edit.shopId) : this.bestFor(ctx, ids, i, edit);
@@ -1460,7 +1536,7 @@ export class CourseService {
 
   /**
    * After the set of shops changes (replace / add / remove) the walk is re-ordered to be as short as possible from the
-   * start. A "move" is the user's own order and is left alone.
+   * start. A "move", "swap" or "reverse" is the user's own order and is left alone ("first" re-orders only the rest).
    */
   private reordered(ctx: EditContext, ids: string[], message: string): { ids: string[]; message: string } {
     const best = shortestOrder(ctx.req.origin, ids.map((id) => ({ id, ...this.pos(ctx, id) })), ctx.req.end);
@@ -1686,7 +1762,7 @@ export class CourseService {
 
   private async optimize(
     origin: LatLngT, pool: Scored[], stopCount: number, timeBudgetMin: number, exact: boolean, must: Set<string> = new Set(),
-    opts: { clock?: Clock; end?: LatLngT; distanceScale?: number } = {},
+    opts: { clock?: Clock; end?: LatLngT; distanceScale?: number; firstId?: string } = {},
   ) {
     const res = await this.model.post<{ courses: ModelCourse[] }>('/optimize', {
       origin,
@@ -1705,6 +1781,7 @@ export class CourseService {
       exact_count: exact,
       ...(opts.end ? { end: { lat: opts.end.lat, lng: opts.end.lng } } : {}),
       ...(opts.distanceScale && opts.distanceScale !== 1 ? { distance_scale: opts.distanceScale } : {}),
+      ...(opts.firstId ? { first_id: opts.firstId } : {}),
     });
     return res.courses;
   }
@@ -1734,6 +1811,70 @@ export class CourseService {
       prev = here;
       return stop;
     });
+  }
+
+  /**
+   * Regions ranked for the brands asked for: the most of them first (all in one walk beats one each), then how many
+   * shops carry them (a brand's own store counts more than a select shop stocking it), then room for a full course.
+   * Returns nothing when the place chosen already has as many of the brands as the best region, or none has any.
+   * picked = no place was chosen (only the map's view), so the course moves there; otherwise they're suggestions.
+   */
+  private async brandRegionsFor(input: CourseRequestInput, brands: BrandRef[], stopCount: number): Promise<{ picked: boolean; regions: BrandRegion[] } | undefined> {
+    const o = input.origin;
+    const unplaced = !o.regionId && !o.gps && !o.label?.trim() && !input.mustShopIds?.length;
+    if (o.regionId || (!unplaced && !o.gps)) return undefined;
+    const keys = brands.map((b) => b.key);
+    const rows = (
+      await this.db.pool.query<{ id: string; name: string; shop_count: number; brand_key: string; shops: number; own: number }>(
+        `SELECT g.id::text, g.name, g.shop_count, b.brand_key, count(DISTINCT s.id)::int AS shops,
+                count(DISTINCT s.id) FILTER (WHERE s.category = 'brand')::int AS own
+           FROM shop_brands b
+           JOIN shops s ON s.id = b.shop_id AND s.status = 'candidate' AND s.category IS NOT NULL AND s.category <> 'excluded'
+           JOIN regions g ON ST_Intersects(g.polygon, s.geom)
+          WHERE b.brand_key = ANY($1)
+          GROUP BY 1, 2, 3, 4`,
+        [keys],
+      )
+    ).rows;
+    const byRegion = new Map<string, { id: string; name: string; size: number; keys: Set<string>; shops: number; weight: number }>();
+    for (const r of rows) {
+      const g = byRegion.get(r.id) ?? { id: r.id, name: r.name, size: r.shop_count, keys: new Set<string>(), shops: 0, weight: 0 };
+      g.keys.add(r.brand_key);
+      g.shops += r.shops;
+      // Past three shops of one brand a region isn't much better for it.
+      g.weight += Math.min(3, r.shops + 0.5 * r.own);
+      byRegion.set(r.id, g);
+    }
+    const score = (g: { keys: Set<string>; weight: number; size: number }) =>
+      g.keys.size * 1000 + g.weight * 10 + Math.min(1, g.size / (stopCount * 4)) * 5;
+    const ranked = [...byRegion.values()].sort((a, b) => score(b) - score(a));
+    if (!ranked.length) return undefined;
+    // Already where the brands are: the shops in view (or within 1.5 km of "내 위치") carry as many of them.
+    const here = o.bounds && unplaced ? usableBox(o.bounds) : undefined;
+    const p = o.gps ?? o.point;
+    if (here || p) {
+      const near = await this.db.pool.query<{ n: number }>(
+        `SELECT count(DISTINCT b.brand_key)::int AS n
+           FROM shop_brands b JOIN shops s ON s.id = b.shop_id AND s.status = 'candidate' AND s.category IS NOT NULL AND s.category <> 'excluded'
+          WHERE b.brand_key = ANY($1) AND ${
+            here ? 'ST_Intersects(s.geom, ST_MakeEnvelope($2, $3, $4, $5, 4326)::geography)' : 'ST_DWithin(s.geom, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, 1500)'
+          }`,
+        here ? [keys, here.swLng, here.swLat, here.neLng, here.neLat] : [keys, p!.lng, p!.lat],
+      );
+      if ((near.rows[0]?.n ?? 0) >= ranked[0].keys.size) return undefined;
+    }
+    const nameOf = new Map(brands.map((b) => [b.key, b.name]));
+    return {
+      picked: unplaced,
+      regions: ranked.slice(0, 3).map((g) => ({ id: g.id, name: g.name, brands: keys.filter((k) => g.keys.has(k)).map((k) => nameOf.get(k)!), shops: g.shops })),
+    };
+  }
+
+  /** Region and brand names of the brand regions in English. */
+  private async brandRegionsEn(regions: BrandRegion[], brands: BrandRef[], brandsEn: Map<string, string>): Promise<BrandRegion[]> {
+    const tr = await inLang(this.db.pool, regions.map((r) => r.name));
+    const en = new Map(brands.map((b) => [b.name, b.nameEn ?? brandsEn.get(b.name) ?? b.name]));
+    return regions.map((r) => ({ ...r, name: tr.get(r.name) ?? r.name, brands: r.brands.map((b) => en.get(b) ?? b) }));
   }
 
   private async resolveOrigin(input: CourseRequestInput) {
@@ -1909,7 +2050,7 @@ export class CourseService {
       .filter((x) => x.score >= 5)
       .sort((a, b) => b.score - a.score)[0];
     const parts: string[] = [];
-    if (s.brandHit?.length) parts.push(`${s.brandHit.join('·')} 취급`);
+    if (s.brandHit?.length) parts.push(`${s.brandHit.join('·')} ${s.category === 'brand' ? '매장' : '취급'}`);
     if (best) parts.push(`${STYLE_LABEL[best.id]} ${best.score}점`);
     parts.push(s.reason_material || s.summary || CATEGORY_LABEL[s.category] || '옷가게');
     return parts.join(' · ');

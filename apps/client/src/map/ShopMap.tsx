@@ -64,6 +64,8 @@ interface Props {
   pickMode: 'start' | 'end' | null;
   /** A course number on the map was tapped: show that stop's card. */
   onStopClick?: (order: number) => void;
+  /** A number held and dropped on another: swap those two stops. Unset (walking, an edit running) turns dragging off. */
+  onStopSwap?: (from: number, to: number) => void;
   /** Stop picking without choosing (the banner's 취소, or Esc). */
   onCancelPick?: () => void;
   pickedPoint: { lat: number; lng: number } | null;
@@ -93,11 +95,16 @@ const inSeoul = (lat: number, lng: number) =>
   lat >= SEOUL_BBOX.minLat && lat <= SEOUL_BBOX.maxLat && lng >= SEOUL_BBOX.minLng && lng <= SEOUL_BBOX.maxLng;
 
 const SEONGSU = { lat: 37.5446, lng: 127.056 };
+// Dragging a course number: held this long without moving it lifts it; moved before that, the press is a map pan.
+const LONG_PRESS_MS = 350;
+const PRESS_SLOP_PX = 8;
+// Dropped within this of another number's centre, the two swap.
+const DROP_PX = 36;
 // Same breakpoint as the bottom-sheet layout in styles/theme.scss (media-breakpoint-down(md)).
 const isPhone = () => window.matchMedia('(max-width: 767.98px)').matches;
 
 export function ShopMap({
-  categories, regions, focusRegionId, focusShop, shopPin, pickMode, onCancelPick, onStopClick, pickedPoint, pickedEnd, walk, onPickPoint, course, hoverOrder, onSelect, onViewport, onCenter,
+  categories, regions, focusRegionId, focusShop, shopPin, pickMode, onCancelPick, onStopClick, onStopSwap, pickedPoint, pickedEnd, walk, onPickPoint, course, hoverOrder, onSelect, onViewport, onCenter,
   onBounds, locateOnStart,
 }: Props) {
   const apollo = useApolloClient();
@@ -118,8 +125,8 @@ export function ShopMap({
   // The pick pins carry a word, so they are redrawn when the language changes.
   const lang = getLang();
   // Latest props for the map's idle listener, which is registered once.
-  const latest = useRef({ categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby, onStopClick, shopPin });
-  latest.current = { categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby, onStopClick, shopPin };
+  const latest = useRef({ categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby, onStopClick, onStopSwap, shopPin });
+  latest.current = { categories, onSelect, onViewport, onCenter, onBounds, course, focusRegionId, pickMode, onPickPoint, nearby, onStopClick, onStopSwap, shopPin };
   const me = useRef<Kakao>(null);
   const pin = useRef<Kakao>(null);
   const endPin = useRef<Kakao>(null);
@@ -160,6 +167,98 @@ export function ShopMap({
     }
     drawShops(data.shopsInBounds.shops);
     latest.current.onViewport({ shown: data.shopsInBounds.shops.length, total: data.shopsInBounds.total });
+  }
+
+  /**
+   * Press and hold a course number, drag it onto another: the two stops swap. The number follows the pointer and the one
+   * it would land on lights up. Cards keep ↑↓ and "1번으로" buttons for the same without a gesture.
+   */
+  function attachStopDrag(el: HTMLElement, order: number) {
+    let timer = 0;
+    let press: { x: number; y: number; id: number } | null = null;
+    let dragging = false;
+    let target: number | null = null;
+    let zIndex = '';
+    const mark = (next: number | null) => {
+      if (next === target) return;
+      if (target != null) stopEls.current.get(target)?.classList.remove('is-drop-target');
+      if (next != null) stopEls.current.get(next)?.classList.add('is-drop-target');
+      target = next;
+    };
+    const nearest = (x: number, y: number) => {
+      let best: number | null = null;
+      let bestD = DROP_PX;
+      for (const [o, other] of stopEls.current) {
+        if (o === order) continue;
+        const r = (other.querySelector('.course-marker') ?? other).getBoundingClientRect();
+        const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2));
+        if (d < bestD) [bestD, best] = [d, o];
+      }
+      return best;
+    };
+    const finish = (drop: boolean) => {
+      window.clearTimeout(timer);
+      if (dragging) {
+        map.current?.setDraggable(true);
+        el.classList.remove('is-dragging');
+        el.style.transform = '';
+        if (el.parentElement) el.parentElement.style.zIndex = zIndex;
+        const to = target;
+        mark(null);
+        if (drop && to != null) latest.current.onStopSwap?.(order, to);
+        el.dataset.dragged = '1';
+        window.setTimeout(() => delete el.dataset.dragged, 0);
+      }
+      dragging = false;
+      press = null;
+    };
+    el.addEventListener('pointerdown', (e) => {
+      if (!latest.current.onStopSwap || e.button !== 0) return;
+      press = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      timer = window.setTimeout(() => {
+        if (!press || !latest.current.onStopSwap) return;
+        dragging = true;
+        map.current?.setDraggable(false);
+        try {
+          el.setPointerCapture(press.id);
+        } catch {
+          // the pointer is already gone
+        }
+        el.classList.add('is-dragging');
+        // Above every other overlay while it moves.
+        if (el.parentElement) {
+          zIndex = el.parentElement.style.zIndex;
+          el.parentElement.style.zIndex = '100001';
+        }
+        navigator.vibrate?.(15);
+      }, LONG_PRESS_MS);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!press) return;
+      const dx = e.clientX - press.x;
+      const dy = e.clientY - press.y;
+      if (!dragging) {
+        if (Math.hypot(dx, dy) > PRESS_SLOP_PX) finish(false); // moved before the hold: the map pans
+        return;
+      }
+      e.preventDefault();
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+      mark(nearest(e.clientX, e.clientY));
+    });
+    el.addEventListener('pointerup', () => finish(true));
+    el.addEventListener('pointercancel', () => finish(false));
+    // A long press would open the browser's menu or select the name.
+    el.addEventListener('contextmenu', (e) => latest.current.onStopSwap && e.preventDefault());
+    // The touch fallback (touch laptops, iPad) pans on touchmove; keep it out of a drag.
+    el.addEventListener(
+      'touchmove',
+      (e) => {
+        if (!dragging) return;
+        e.stopPropagation();
+        e.preventDefault();
+      },
+      { passive: false },
+    );
   }
 
   function clearShops() {
@@ -341,6 +440,7 @@ export function ShopMap({
       el.setAttribute('aria-label', t(`${s.order}번 ${s.shop.name} 카드 보기`, `Show stop ${s.order}, ${s.shop.name}`));
       const open = (e: Event) => {
         e.stopPropagation();
+        if (el.dataset.dragged) return; // the click that ends a drag
         latest.current.onStopClick?.(s.order);
       };
       el.addEventListener('click', open);
@@ -351,6 +451,7 @@ export function ShopMap({
         }
       });
       stopEls.current.set(s.order, el);
+      attachStopDrag(el, s.order);
       // clickable: the overlay takes the tap itself instead of passing it to the map underneath.
       courseLayer.current.push(new k.maps.CustomOverlay({ map: map.current, position: pos, content: el, xAnchor: 0, yAnchor: 0.5, zIndex: 3, clickable: true }));
     }

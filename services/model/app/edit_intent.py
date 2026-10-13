@@ -31,9 +31,9 @@ class EditIntentRequest(BaseModel):
 
 
 class Op(BaseModel):
-    op: Literal["remove", "replace", "move", "add", "replan"]
-    order: int | None = Field(None, description="대상 가게 번호(1부터). add/replan은 null")
-    to_order: int | None = Field(None, description="move일 때 옮길 자리")
+    op: Literal["remove", "replace", "move", "swap", "reverse", "add", "replan"]
+    order: int | None = Field(None, description="대상 가게 번호(1부터). add/replan/reverse는 null")
+    to_order: int | None = Field(None, description="move일 때 옮길 자리, swap일 때 맞바꿀 가게 번호")
     want_category: Literal["select_shop", "vintage", "brand", "spa", "general", "complex"] | None = None
     want_style: StyleId | None = None
     want_item: ItemId | None = None
@@ -52,7 +52,9 @@ SYSTEM = f"""너는 옷가게 쇼핑 코스를 고쳐 주는 비서다. 지금 �
 - remove: order번 가게 빼기 ("3번 빼줘", "마지막 건 빼")
 - replace: order번 가게를 다른 가게로 ("2번 다른 데로", "2번 말고 더 싼 데" → want_budget low, "신발 가게로" → want_item shoes,
   "빈티지로" → want_category vintage 또는 want_style vintage, "편집숍으로" → want_category select_shop)
-- move: order번을 to_order번 자리로 ("4번을 맨 앞으로" → to_order 1, "2번이랑 3번 바꿔" → move order 2 to_order 3)
+- move: order번을 to_order번 자리로 ("4번을 맨 앞으로", "4번 먼저 가고 싶어" → to_order 1)
+- swap: order번과 to_order번이 서로 자리를 바꾼다 ("2번이랑 5번 바꿔" → swap order 2 to_order 5)
+- reverse: 코스 전체를 거꾸로 ("반대로 돌래", "역순으로", "끝에서부터") → order null
 - add: 가게 하나 더 넣기 ("가방 가게 하나 추가" → want_item bag)
 - 가게 이름을 대면 그 가게를 넣는다: shop_name에 이름만(조사·'가게' 빼고) 쓴다. 다른 가게로 바꾸지 않는다.
   "팔라스 넣어줘" → add, shop_name "팔라스" / "2번을 아더에러로 바꿔" → replace order 2, shop_name "아더에러"

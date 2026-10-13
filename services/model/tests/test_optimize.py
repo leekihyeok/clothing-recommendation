@@ -165,3 +165,34 @@ def test_pinned_shop_waits_for_its_opening():
     req = OptimizeRequest(origin=ORIGIN, candidates=[late, *others], stop_count=4, time_budget_min=300, exact_count=True)
     rec = optimize(req).courses[0]
     assert "late" in rec.stop_ids and rec.stop_ids[0] != "late"
+
+
+def test_first_shop_starts_the_course_and_the_rest_is_best_from_there():
+    rng = random.Random(11)
+    for _ in range(15):
+        cands = [cand(i, rng.uniform(-0.006, 0.006), rng.uniform(-0.008, 0.008), rng.uniform(0.2, 1.0)) for i in range(7)]
+        req = OptimizeRequest(origin=ORIGIN, candidates=cands, stop_count=4, time_budget_min=240)
+        p = problem(req, 0.25)
+        p.first = 4
+        route = solve(p)
+        assert route[0] == 4
+        # brute force over routes that start with shop 4
+        best = max(
+            p.objective([4, *rest])
+            for k in range(0, 4)
+            for rest in itertools.permutations([n for n in range(1, 8) if n != 4], k)
+            if p.feasible([4, *rest])
+        )
+        assert p.objective(route) >= best - 1e-6
+
+
+def test_first_shop_closed_then_falls_back():
+    far_open_late = cand(0, 0.004, 0.004, 0.9).model_copy(update={"open_from": 300.0})  # opens in 5 hours
+    req = OptimizeRequest(
+        origin=ORIGIN, candidates=[far_open_late, cand(1, 0.001, 0, 0.6), cand(2, 0.002, 0.001, 0.6)],
+        stop_count=3, time_budget_min=120, first_id="0",
+    )
+    res = optimize(req)
+    assert res.courses[0].stop_ids and res.courses[0].stop_ids[0] != "0"
+    ok = optimize(req.model_copy(update={"candidates": [cand(0, 0.004, 0.004, 0.9), *req.candidates[1:]]}))
+    assert all(c.stop_ids[0] == "0" for c in ok.courses)

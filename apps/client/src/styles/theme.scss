@@ -543,6 +543,20 @@ details.more > summary {
   }
 }
 
+// Brands without a place: where the course was planned for them, and the other regions as chips.
+.brand-region {
+  .brand-region-line {
+    display: flex;
+    gap: 0.4rem;
+    margin: 0;
+    line-height: 1.5;
+    svg { flex: none; margin-top: 0.2rem; }
+  }
+  .chip-row { margin-top: 0.75rem; }
+  .chip { min-height: 44px; }
+  .chip-meta { color: var(--ink-2); font-size: 0.8125rem; }
+}
+
 // ---------- course result ----------
 .course-title {
   font-size: 1.375rem;
@@ -1050,6 +1064,43 @@ details.more > summary {
     transform: scale(1.15);
   }
   &.is-active .course-label { background: var(--ink); color: #fff; }
+}
+
+// Hold a number and drop it on another to swap them (ShopMap attachStopDrag).
+.course-stop {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  &.is-dragging {
+    cursor: grabbing;
+    .course-marker {
+      background: var(--signal);
+      transform: scale(1.2);
+      box-shadow: 0 4px 12px rgba(12, 10, 9, 0.3);
+    }
+    .course-label { background: var(--ink); color: #fff; }
+  }
+  // Where it would land: an ink ring around the number, so it reads without colour.
+  &.is-drop-target .course-marker {
+    outline: 3px solid var(--signal);
+    outline-offset: 3px;
+    transform: scale(1.15);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .course-stop.is-dragging .course-marker,
+  .course-stop.is-drop-target .course-marker { transform: none; }
+}
+
+// Above the stop list: "거꾸로 걷기" and the map-drag hint.
+.order-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 12px;
+  margin-top: 16px;
+  .hint { margin: 0; flex: 1 1 14rem; }
 }
 
 .course-label {

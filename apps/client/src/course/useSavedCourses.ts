@@ -14,7 +14,7 @@ const CourseDoc = graphql(`
       startName
       end { lat lng }
       endName
-      request { styles stopCount maxStops timeBudgetMin budget items regionName regionId defaultedFields tasteNote withCafe withFood gender startAt endBy roundTrip brands { key name } mustShops { id name } skipVisited bounds { swLat swLng neLat neLng } ignoreWeather groupId groupNames }
+      request { styles stopCount maxStops timeBudgetMin budget items regionName regionId defaultedFields tasteNote withCafe withFood gender startAt endBy roundTrip brands { key name } mustShops { id name } skipVisited bounds { swLat swLng neLat neLng } ignoreWeather groupId groupNames regionPicked brandRegions { id name brands shops } }
       weather { condition summary rainChance tempC applied note }
       variants {
         variant label totalDistanceM walkMin totalMin note finishAt breaks { kind afterOrder name lat lng address placeUrl category minutes detourM }

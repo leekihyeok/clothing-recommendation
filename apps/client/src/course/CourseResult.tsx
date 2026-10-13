@@ -1,4 +1,4 @@
-import { ArrowArcLeft, ArrowClockwise, ArrowDown, ArrowUp, ArrowUpRight, ArrowsClockwise, BookmarkSimple, CalendarBlank, Clock, CloudRain, CloudSun, Coffee, DotsSixVertical, DotsThree, Flag, ForkKnife, Info, LinkSimple, MagnifyingGlass, MapTrifold, Megaphone, PersonSimpleWalk, Plus, PushPin, ShareNetwork, Snowflake, Sparkle, Storefront, Sun, Tag, ThermometerCold, ThermometerHot, Warning, X } from '@phosphor-icons/react';
+import { ArrowArcLeft, ArrowClockwise, ArrowDown, ArrowLineUp, ArrowUp, ArrowsDownUp, ArrowUpRight, ArrowsClockwise, BookmarkSimple, CalendarBlank, Clock, CloudRain, CloudSun, Coffee, DotsSixVertical, DotsThree, Flag, ForkKnife, Info, LinkSimple, MagnifyingGlass, MapPin, MapTrifold, Megaphone, PersonSimpleWalk, Plus, PushPin, ShareNetwork, Snowflake, Sparkle, Storefront, Sun, Tag, ThermometerCold, ThermometerHot, Warning, X } from '@phosphor-icons/react';
 import { useEffect, useRef, useState } from 'react';
 import { CATEGORY_BY_ID } from '../map/categories';
 import { ClosedReport, RatePrompt, SaveButton, VisitButton } from '../me/ShopActions';
@@ -34,6 +34,8 @@ interface Props {
   /** "다른 지역으로 이어 가기": plan the next area, starting where this course ends. */
   regions: { id: string; name: string }[];
   onContinue: (regionId: string) => void;
+  /** A region offered for the brands asked for: plan there with the same conditions. */
+  onBrandRegion: (regionId: string) => void;
   onOpenCourse: (id: string) => void;
   echo: Echo | null;
   busy: boolean;
@@ -50,7 +52,7 @@ type Variant = PlannedCourse['variants'][number];
  * The card's less frequent actions behind "⋯": shop details, Kakao Map, report closed. Esc or a tap outside closes
  * it; the first item takes focus so the keyboard can go straight on.
  */
-function CardMenu({ shopId, name, placeUrl, state, courseId, onOpenShop, onFind }: {
+function CardMenu({ shopId, name, placeUrl, state, courseId, onOpenShop, onFind, onFirst }: {
   shopId: string;
   name: string;
   placeUrl: string | null;
@@ -59,6 +61,8 @@ function CardMenu({ shopId, name, placeUrl, state, courseId, onOpenShop, onFind 
   onOpenShop: (id: string) => void;
   /** "이름으로 찾아 바꾸기": open the shop search for this stop. */
   onFind: () => void;
+  /** "1번으로": this stop goes first, the rest keep their order. Unset on stop 1 or while an edit runs. */
+  onFirst?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -103,6 +107,18 @@ function CardMenu({ shopId, name, placeUrl, state, courseId, onOpenShop, onFind 
           >
             <MagnifyingGlass size={16} aria-hidden /> {t('이름으로 찾아 바꾸기', 'Swap by name')}
           </button>
+          {onFirst && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onFirst();
+              }}
+            >
+              <ArrowLineUp size={16} aria-hidden /> {t('1번으로 옮기기', 'Make it stop 1')}
+            </button>
+          )}
           {placeUrl && (
             <a role="menuitem" href={placeUrl} target="_blank" rel="noreferrer" onClick={() => setOpen(false)}>
               <MapTrifold size={16} aria-hidden /> {t('카카오맵에서 보기', 'View in Kakao Map')} <ArrowUpRight size={12} aria-hidden />
@@ -209,7 +225,63 @@ function PinButton({ name, pinned, full, disabled, onToggle }: { name: string; p
   );
 }
 
-export function CourseResult({ course, styleLabels, variantIndex, activeOrder, onVariant, onHoverStop, onFitAll, onAnother, onGender, onOpenShop, onCourseId, regions, onContinue, onOpenCourse, echo, busy, editor, onWalk, onWeather }: Props) {
+/**
+ * Brands asked for without a place: "아더에러 가게가 가장 많은 성수에서 짰어요", or, from 내 위치 with none of them
+ * nearby, where they are. The other regions are one tap away, planned with the same conditions.
+ */
+function BrandRegionNote({ request, busy, onRegion }: {
+  request: PlannedCourse['request'];
+  busy: boolean;
+  onRegion: (regionId: string) => void;
+}) {
+  const list = request.brandRegions ?? [];
+  const all = request.brands.map((b) => b.name);
+  const here = request.regionPicked ? list.find((g) => g.id === request.regionId) : undefined;
+  const others = list.filter((g) => g !== here);
+  const en = getLang() === 'en';
+  let line: string;
+  if (here) {
+    const missing = all.filter((b) => !here.brands.includes(b));
+    line =
+      all.length > 1 && !missing.length
+        ? t(`${all.join('·')} 가게를 모두 볼 수 있는 ${here.name}에서 짰어요`, `Planned in ${here.name}, where you can see all of ${all.join(', ')}`)
+        : t(`${here.brands.join('·')} 가게가 가장 많은 ${here.name}에서 짰어요`, `Planned in ${here.name}, with the most ${here.brands.join(', ')} shops`);
+    const where = others.find((g) => missing.some((m) => g.brands.includes(m)));
+    if (where) {
+      const there = missing.filter((m) => where.brands.includes(m));
+      line += t(` · ${there.join('·')} 가게는 ${where.name}에 있어요`, ` · ${there.join(', ')} is in ${where.name}`);
+    }
+  } else {
+    line = t(`근처에는 ${all.join('·')} 가게가 없어요. 모여 있는 곳에서 짜 볼까요?`, `No ${all.join(', ')} shops nearby. Plan where they are?`);
+  }
+  return (
+    <div className="region-note brand-region" role="note">
+      <p className="brand-region-line">
+        <Tag size={14} weight="fill" aria-hidden /> {line}
+      </p>
+      {others.length > 0 && (
+        <div className="chip-row" role="group" aria-label={t('다른 지역에서 짜기', 'Plan in another area')}>
+          {others.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              className="chip"
+              disabled={busy}
+              onClick={() => onRegion(g.id)}
+              aria-label={t(`${g.name}에서 다시 짜기, ${g.brands.join('·')} 가게 ${g.shops}곳`, `Plan in ${g.name}: ${g.shops} ${g.brands.join(', ')} ${g.shops === 1 ? 'shop' : 'shops'}`)}
+            >
+              <MapPin size={14} aria-hidden />
+              {g.name}
+              <span className="chip-meta tabular">{en ? `${g.brands.join(' + ')} · ${g.shops}` : `${g.brands.join('·')} ${g.shops}곳`}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CourseResult({ course, styleLabels, variantIndex, activeOrder, onVariant, onHoverStop, onFitAll, onAnother, onGender, onOpenShop, onCourseId, regions, onContinue, onBrandRegion, onOpenCourse, echo, busy, editor, onWalk, onWeather }: Props) {
   const v = course.variants[variantIndex] ?? course.variants[0];
   const [ask, setAsk] = useState('');
   const [shareNote, setShareNote] = useState<string | null>(null);
@@ -320,6 +392,8 @@ export function CourseResult({ course, styleLabels, variantIndex, activeOrder, o
           </div>
         </div>
       )}
+
+      {course.request.brandRegions?.length ? <BrandRegionNote request={course.request} busy={working} onRegion={onBrandRegion} /> : null}
 
       <ul className="course-stats">
         <li>
@@ -564,6 +638,14 @@ export function CourseResult({ course, styleLabels, variantIndex, activeOrder, o
         <p className="hint mt-1">{t('가는 길에서 가장 덜 돌아가는 곳을 카카오맵 검색 결과에서 골라, 실제 위치에 맞는 순서에 넣어요 (체인보다 동네 가게 먼저). 평점 기준은 아니에요.', 'We pick the spot from Kakao Map that takes you least out of your way and put it where it falls on the route (local places before chains). It’s not based on ratings.')}</p>
       </section>
 
+      {last > 1 && (
+        <div className="order-tools">
+          <button type="button" className="btn-text" disabled={working} onClick={() => editor.apply({ op: 'reverse' })}>
+            <ArrowsDownUp size={16} aria-hidden /> {t('거꾸로 걷기', 'Walk it in reverse')}
+          </button>
+          <p className="hint">{t('지도에서 번호를 꾹 누른 채 다른 번호에 놓으면 둘이 자리를 바꿔요', 'On the map, press and hold a number, then drop it on another to swap the two')}</p>
+        </div>
+      )}
       <ol className="course-list" role="tabpanel" ref={listRef}>
         {v.stops.map((s) => (
           <li
@@ -691,6 +773,7 @@ export function CourseResult({ course, styleLabels, variantIndex, activeOrder, o
                     courseId={course.id}
                     onOpenShop={onOpenShop}
                     onFind={() => setFinder(s.order)}
+                    onFirst={s.order > 1 && !working ? () => editor.apply({ op: 'first', order: s.order }) : undefined}
                   />
                 </div>
               </div>

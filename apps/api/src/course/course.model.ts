@@ -326,6 +326,12 @@ export class ResolvedRequest {
   @Field(() => [String], { nullable: true, description: '같이 가는 사람 이름 (취향을 섞은 사람들)' })
   groupNames?: string[];
 
+  @Field({ nullable: true, description: '지역을 정하지 않아서 말한 브랜드가 모인 지역을 골라 짰다' })
+  regionPicked?: boolean;
+
+  @Field(() => [BrandRegion], { nullable: true, description: '브랜드가 모인 지역 (첫 번째가 가장 잘 맞음). 근처에 그 브랜드가 없을 때만' })
+  brandRegions?: BrandRegion[];
+
   @Field(() => [String], { description: '기본값으로 채운 칸 (칩을 흐리게 표시)' })
   defaultedFields: string[];
 }
@@ -456,6 +462,21 @@ export class CourseVariant {
   finishAt?: string;
 }
 
+@ObjectType({ description: '말한 브랜드가 모인 지역 (가장 잘 맞는 순)' })
+export class BrandRegion {
+  @Field(() => ID)
+  id: string;
+
+  @Field()
+  name: string;
+
+  @Field(() => [String], { description: '이 지역에서 볼 수 있는 브랜드 (보여 줄 이름)' })
+  brands: string[];
+
+  @Field(() => Int, { description: '그 브랜드를 다루는 가게 수' })
+  shops: number;
+}
+
 @ObjectType()
 export class Course {
   @Field(() => ID)
@@ -492,7 +513,7 @@ export class Course {
   createdAt: Date;
 }
 
-@InputType({ description: '코스 고치기 한 번. op: remove | replace | move | add | replan' })
+@InputType({ description: '코스 고치기 한 번. op: remove | replace | move | first | swap | reverse | add | replan' })
 export class CourseEditInput {
   @Field()
   op: string;
@@ -500,7 +521,7 @@ export class CourseEditInput {
   @Field(() => Int, { nullable: true, description: '대상 가게 번호 (1부터)' })
   order?: number;
 
-  @Field(() => Int, { nullable: true, description: 'move: 옮길 자리' })
+  @Field(() => Int, { nullable: true, description: 'move: 옮길 자리 / swap: 맞바꿀 가게 번호' })
   toOrder?: number;
 
   @Field(() => ID, { nullable: true, description: 'replace/add: 이 가게로 (이름으로 찾았거나 지도·가게 정보에서 고른 가게)' })

@@ -36,6 +36,9 @@ const RULES: [RegExp, (...m: string[]) => string][] = [
   [new RegExp(`^(\\d+)번 다음, 가는 길에 있는 ${NAME} 넣었어요$`), (_, k, x) => `Added ${n(x)} after #${k}, on the way`],
   [new RegExp(`^${NAME} 넣었어요$`), (_, x) => `Added ${n(x)}`],
   [new RegExp(`^${NAME} (\\d+)번으로 옮겼어요$`), (_, x, k) => `Moved ${n(x)} to #${k}`],
+  [/^(\d+)번 (.+?) ↔ (\d+)번 (.+?) 순서를 바꿨어요$/, (_, i, a, j, b) => `Swapped #${i} ${a} and #${j} ${b}`],
+  [/^코스를 거꾸로 걸어요$/, () => 'Reversed the route'],
+  [/^그대로예요$/, () => 'No change'],
   [/^(.+?) 대신 (.+?)(?:으로|로) 바꿨어요$/, (_, a, b) => `Swapped ${a} for ${b}`],
   [/^(.+?) 대신 (.+)$/, (_, a, b) => `Swapped ${a} for ${b}`],
   [/^더 가까운 가게 위주로 다시 짰어요$/, () => 'Replanned with closer shops'],
@@ -107,7 +110,7 @@ export function weatherEn(w: CourseWeather | undefined): CourseWeather | undefin
 /** A course card's reason in English: brands it carries, the best chosen style's score, then the shop's own line. */
 export function reasonEn(parts: { brands: string[]; style?: { label: string; score: number }; text?: string; category: string }): string {
   const out: string[] = [];
-  if (parts.brands.length) out.push(`Carries ${parts.brands.join(', ')}`);
+  if (parts.brands.length) out.push(parts.category === 'brand' ? `${parts.brands.join(', ')} store` : `Carries ${parts.brands.join(', ')}`);
   if (parts.style) out.push(`${parts.style.label} ${parts.style.score}/10`);
   out.push(parts.text || CATEGORY_EN[parts.category] || 'Clothing store');
   return out.join(' · ');
